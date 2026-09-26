@@ -1,0 +1,24 @@
+cabal-version: 3.0
+name: aihc-cabal-syntax
+version: 0.1.0.0
+synopsis: Parse Cabal files for aihc
+license: Unlicense
+license-file: LICENSE
+build-type: Simple
+extra-source-files: README.md test/fixtures/*.cabal
+
+library
+  exposed-modules: Aihc.Cabal Aihc.Cabal.Types Aihc.Cabal.Version
+  other-modules: Aihc.Cabal.Parser
+  hs-source-dirs: src
+  build-depends: base >=4.16 && <5, bytestring, containers, text, megaparsec >=9 && <10, parser-combinators
+  default-language: Haskell2010
+  ghc-options: -Wall -Werror
+
+test-suite parser-tests
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs: test
+  build-depends: base, aihc-cabal-syntax, bytestring, containers, text, Cabal-syntax >=3.12 && <3.13
+  default-language: Haskell2010
+  ghc-options: -Wall -Werror
