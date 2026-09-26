@@ -1,0 +1,16 @@
+name: Check
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.28.5/install
+      - run: nix build --no-update-lock-file
+      - run: nix flake check --no-update-lock-file
