@@ -91,17 +91,16 @@ Use the offset and size to copy the original bytes from `result-corpus/index.tar
 Alternatively, use `cases()` in `tests/hackage/corpus.py` to read each revision separately.
 Do not use normal tar extraction to select a revision.
 
-Build the comparison command:
+Run the test suite on the selected file in the Nix development environment:
 
 ```sh
-nix build --no-update-lock-file
+nix develop --no-update-lock-file -c cabal test hackage-compliance --offline \
+  --test-options='--file case.cabal' --test-show-details=direct
 ```
 
-Run it on the selected file:
-
-```sh
-./result/bin/hackage-compliance --file case.cabal
-```
+`hackage-compliance` is a test suite, not an installed executable.
+With no arguments, it runs the conversion tests.
+The Nix comparison uses a private test runner. The library output does not contain this runner.
 
 ## Fixed dependencies
 

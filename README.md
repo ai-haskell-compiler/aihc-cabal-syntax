@@ -108,7 +108,8 @@ Builds and tests do not fetch packages from Hackage.
 The tests compare selected results with Cabal-syntax 3.12.1.0 in the Nix environment.
 They cover version ranges, common imports, condition selection, source fields,
 native build fields, named libraries, configure output, and invalid input.
-Cabal-syntax is a dependency of the tests and the comparison command. The library does not depend on it.
+Cabal-syntax is a test dependency only. The library does not depend on it.
+`hackage-compliance` is a Cabal test suite. The installed library has no comparison executable.
 
 ## Hackage comparison
 

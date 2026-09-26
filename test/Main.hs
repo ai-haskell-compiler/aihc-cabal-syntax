@@ -10,7 +10,6 @@ import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
 import Aihc.Cabal
-import Compliance.Tests (testCompliance)
 import qualified Distribution.PackageDescription as C
 import qualified Distribution.PackageDescription.Parsec as C
 import qualified Distribution.Parsec as C
@@ -79,7 +78,6 @@ main = do
   testLegacy
   testBuildInfo
   testErrors
-  testCompliance
   putStrLn "All parser checks passed"
 
 testVersions :: IO ()

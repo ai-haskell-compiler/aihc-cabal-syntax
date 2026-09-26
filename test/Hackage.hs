@@ -15,6 +15,7 @@ import System.Environment (getArgs)
 import System.FilePath ((</>))
 import System.IO (Handle, IOMode (..), hPutStrLn, stderr, withBinaryFile)
 import Compliance.Compare
+import Compliance.Tests (testCompliance)
 
 data Counts = Counts
   { total :: !Int
@@ -58,6 +59,7 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
+    [] -> testCompliance
     ["--file", path] -> do
       result <- BS.readFile path >>= classify
       LBS.putStr (encode (case result of
