@@ -26,12 +26,17 @@ testCompliance = do
     , "test-suite tests\n  type: exitcode-stdio-1.0\n  main-is: Test.hs\nbenchmark bench\n  type: exitcode-stdio-1.0\n  main-is: Bench.hs\n"
     , "foreign-library native\n  type: native-shared\n  options: standalone\n  c-sources: native.c\n"
     , "synopsis: A sample\nauthor: A. Person\nlibrary\n  extra-libraries: z\n  x-example: retained\n"
+    , "source-repository head\n  type: git\n  location: https://example.com/sample\nlibrary\n  buildable: True\n"
+    , "source-repository head\n  type: cvs\n  location: example.com:/source\n  module: sample\n  branch: main\nsource-repository this\n  type: git\n  location: https://example.com/sample\n  tag: v1.0\n  subdir: \"source files\"\nsource-repository head\n  type: darcs\n  location: https://example.com/mirror\n"
+    , "source-repository head\n  type: hg\n  location: https://example.com/first\n  location: https://example.com/second\n  x-note: first\n    second\n"
+    , "source-repository future\n  type: future\n"
+    , "source-repository HEAD\n  type: GIT\n  location: https://example.com/sample\n"
+    , "source-repository head\n  type: git\n  location: https://example.com/sample\n  subdir:\n"
     ] $ \body -> do
       let result = compareBytes (header <> body)
       assert ("Expected equal structures: " ++ show result ++ "\n" ++ BSC.unpack body) (outcome result == Match)
   forM_
     [ "flag fast\n  description: This text is lost\nlibrary\n  buildable: True\n"
-    , "source-repository head\n  type: git\n  location: https://example.com/sample\nlibrary\n  buildable: True\n"
     , "build-type: Custom\ncustom-setup\n  setup-depends: base, Cabal\nlibrary\n  buildable: True\n"
     ] $ \body -> assert "Lost data must fail equality" (outcome (compareBytes (header <> body)) == Mismatch)
   assert "Both parsers reject invalid input" (outcome (compareBytes "not a package") == BothRejected)
@@ -54,5 +59,16 @@ testCompliance = do
   assert "Count conversion errors" (fst (comparePackage invalid ref) == ConversionError)
   let metadata = pkg { A.packageFields = Map.insert "synopsis" ["Changed"] (A.packageFields pkg) }
   assert "Convert retained metadata" (fst (comparePackage metadata ref) == Mismatch)
+  let repositoryBytes = header <> "source-repository head\n  type: git\n  location: https://example.com/sample\n"
+  repositoryPackage <- either (fail . show) pure (A.parseValue (A.parsePackage repositoryBytes))
+  repositoryReference <- either (fail . show) pure
+    (snd (C.runParseResult (C.parseGenericPackageDescription repositoryBytes)))
+  let changedRepository = repositoryPackage { A.packageSourceRepositories =
+        [A.SourceRepository "this" (Map.fromList [("type", ["git"]), ("tag", ["v1.0"])])] }
+  assert "Compare repository data"
+    (fst (comparePackage changedRepository repositoryReference) == Mismatch)
+  let removedRepository = repositoryPackage { A.packageSourceRepositories = [] }
+  assert "Detect a missing repository"
+    (fst (comparePackage removedRepository repositoryReference) == Mismatch)
   converted <- either fail pure (toCabal pkg)
   assert "Full Cabal equality" (converted == ref)
