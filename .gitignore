@@ -24,3 +24,4 @@ cabal.project.local~
 
 /result
 /result-*
+__pycache__/
