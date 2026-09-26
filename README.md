@@ -108,7 +108,36 @@ Builds and tests do not fetch packages from Hackage.
 The tests compare selected results with Cabal-syntax 3.12.1.0 in the Nix environment.
 They cover version ranges, common imports, condition selection, source fields,
 native build fields, named libraries, configure output, and invalid input.
-Cabal-syntax is a test dependency only.
+Cabal-syntax is a test dependency only. The library does not depend on it.
+`hackage-compliance` is a Cabal test suite. The installed library has no comparison executable.
+
+## Hackage comparison
+
+Run the full comparison:
+
+```sh
+nix build .#hackage-compliance --no-update-lock-file -o result-compliance
+cat result-compliance/summary.json
+```
+
+The command reads all 200,642 Cabal file revisions in the fixed Hackage index.
+It parses each file with this library and Cabal-syntax 3.12.1.0.
+It converts our AST to `GenericPackageDescription` and compares the complete values with `(==)`.
+It does not select conditions or remove fields before comparison.
+
+`parser_accepted` counts files that this library parses without errors.
+`outcomes.match` counts files that both parsers accept and produce equal structures after conversion.
+The report separates parse errors, conversion errors, unequal structures, and exceptions.
+Warnings do not count as parse errors.
+
+The converter uses our typed fields for dependencies, conditions, flags, and component data.
+It uses Cabal field grammars to convert fields that our API retains as text.
+It cannot read the original file or the reference result.
+Lost sections and flag descriptions cause unequal structures.
+This is a data comparison against Cabal-syntax, not a byte-for-byte source comparison.
+Cabal-syntax does not retain comments or source formatting in these structures.
+
+See [the Hackage test instructions](docs/hackage.md) for report details and repeat tests.
 
 The files in `test/fixtures` contain package and component fields from `aihc` revision
 `21ada6eb2d668904bb2cacbb5be25bad692975d6`.

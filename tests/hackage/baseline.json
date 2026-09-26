@@ -1,0 +1,18 @@
+{
+  "outcomes": {
+    "both_rejected": 4,
+    "conversion_error": 6,
+    "exception": 0,
+    "match": 10138,
+    "mismatch": 108613,
+    "parser_error": 81858,
+    "reference_error": 23
+  },
+  "parser_accepted": 118780,
+  "parser_with_warnings": 0,
+  "reference": "Cabal-syntax",
+  "reference_accepted": 200615,
+  "reference_version": "3.12.1.0",
+  "reference_with_warnings": 44393,
+  "total": 200642
+}

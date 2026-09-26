@@ -1,0 +1,10 @@
+{
+  "url": "https://hackage-content.haskell.org/01-index.tar.gz",
+  "prefixBytes": 1039195648,
+  "hash": "sha256-C7uur4E/HCUrUrBrE8PZmWSWUsKHC3VKh3S70ph+Ttw=",
+  "counts": {
+    "packages": 19488,
+    "versions": 153921,
+    "revisions": 200642
+  }
+}
