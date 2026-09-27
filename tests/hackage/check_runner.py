@@ -36,21 +36,22 @@ class RunnerTests(unittest.TestCase):
         self.archive([
             ("sample/1.0/sample.cabal", header + b"unknown-field: warning\n"),
             ("sample/1.0/package.json", b"{}"),
-            ("sample/1.0/sample.cabal", header + b"build-type: Custom\ncustom-setup\n  setup-depends: base, Cabal\n"),
-            ("old/1/old.cabal", b"name: old\nversion: 1\n"),
+            # Cabal-syntax 3.12 does not accept format version 3.14.
+            ("sample/1.0/sample.cabal", b"cabal-version: 3.14\nname: sample\nversion: 1.0\n"),
+            ("old/1/old.cabal", b"name: old\n"),
         ])
         result = self.run_report()
         self.assertEqual(result.returncode, 0, result.stderr)
         summary = json.loads((self.report / "summary.json").read_text())
         self.assertEqual(summary["total"], 3)
         self.assertEqual(summary["parser_accepted"], 2)
-        self.assertEqual(summary["reference_accepted"], 3)
+        self.assertEqual(summary["reference_accepted"], 1)
         self.assertEqual(summary["reference_with_warnings"], 1)
         counts = summary["outcomes"]
         self.assertEqual(sum(counts.values()), 3)
         self.assertEqual(counts["match"], 1)
-        self.assertEqual(counts["mismatch"], 1)
-        self.assertEqual(counts["parser_error"], 1)
+        self.assertEqual(counts["reference_error"], 1)
+        self.assertEqual(counts["both_rejected"], 1)
         failures = [json.loads(line) for line in (self.report / "failures.jsonl").read_text().splitlines()]
         self.assertEqual([(f["path"], f["revision"]) for f in failures],
                          [("sample/1.0/sample.cabal", 1), ("old/1/old.cabal", 0)])

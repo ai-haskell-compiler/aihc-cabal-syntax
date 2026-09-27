@@ -12,13 +12,27 @@ The reference parser is **Cabal-syntax 3.12.1.0**.
 
 | Result | Files | All files |
 | --- | ---: | ---: |
-| aihc-cabal-syntax accepts | 185,992 | 92.70% |
+| aihc-cabal-syntax accepts | 200,584 | 99.97% |
 | Cabal-syntax accepts | 200,615 | 99.99% |
-| Equal converted data | 173,724 | 86.58% |
+| Equal converted data | 200,558 | 99.96% |
 
 An accepted file does not prove full compliance.
 The equality test compares complete `GenericPackageDescription` values after conversion of our AST.
 Conversion limits can also cause differences. This library is not a complete replacement for Cabal-syntax.
+
+## Stackage LTS results
+
+The Stackage test uses **Stackage LTS 24.38** with **3,370 packages**.
+The pinned Nixpkgs revision supplies the package list.
+The test uses the last revision of each package version in the fixed Hackage index.
+
+| Result | Packages | All packages |
+| --- | ---: | ---: |
+| aihc-cabal-syntax accepts | 3,370 | 100.00% |
+| Cabal-syntax accepts | 3,370 | 100.00% |
+| Equal converted data | 3,370 | 100.00% |
+
+The Nix check fails if a package in the snapshot does not have equal converted data.
 
 ## Parse benchmark
 
@@ -26,8 +40,8 @@ Each parser reads all **200,642 revisions** in a separate process on the same ma
 
 | Measurement | aihc-cabal-syntax | Cabal-syntax | aihc / Cabal-syntax |
 | --- | ---: | ---: | ---: |
-| Elapsed time | 45.99 s | 134.27 s | 0.34× |
-| Peak process memory (RSS) | 25.86 MiB | 38.22 MiB | 0.68× |
+| Elapsed time | 48.34 s | 115.76 s | 0.42× |
+| Peak process memory (RSS) | 29.91 MiB | 38.48 MiB | 0.78× |
 
 A ratio below 1 means less time or memory than Cabal-syntax.
 Measured on `aarch64-darwin` with GHC 9.10.3, `-O2`, and one RTS capability.

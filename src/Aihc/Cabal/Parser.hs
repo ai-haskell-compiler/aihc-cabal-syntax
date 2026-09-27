@@ -1,412 +1,563 @@
 {-# LANGUAGE OverloadedStrings #-}
+-- | Read package descriptions. The rules follow the package parser of
+-- Cabal-syntax 3.12. Cabal format version 3.14 and build type @Hooks@ are
+-- also accepted.
 module Aihc.Cabal.Parser (parsePackage, parseBuildInfo) where
 
-import Control.Applicative (empty, optional, (<|>))
-import Control.Monad (foldM, unless, when)
-import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
+import Control.Monad (foldM, guard, unless, when)
+import Data.Bits (shiftL, (.&.), (.|.))
 import qualified Data.ByteString as BS
-import Data.Char (isAlphaNum, isAscii, isLetter, isSpace)
+import qualified Data.ByteString.Char8 as BS8
+import Data.Char (isAlphaNum)
+import Data.List (find, partition)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
+import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.Void (Void)
-import Text.Megaparsec (Parsec, between, eof, errorBundlePretty, many, manyTill, runParser, satisfy, sepBy1, sepEndBy, sepEndBy1, some)
-import Text.Megaparsec.Char (char, space1, string')
-import qualified Text.Megaparsec.Char.Lexer as L
+import Text.Megaparsec (eof, runParser, takeWhile1P, (<|>))
+import Text.Megaparsec.Char (space)
+import Aihc.Cabal.Condition (parseCondition)
+import Aihc.Cabal.Fields (Field (..), SectionArg (..), readFields)
 import Aihc.Cabal.Types
+import Aihc.Cabal.Values
 import Aihc.Cabal.Version
 
-type Parser = Parsec Void Text
 type Result a = Either Diagnostic a
 
-data Line = Line Int Int Text deriving Show
-data Node = Field Int Text Text | Section Int Text [Node] deriving Show
+type Fields = Map Text [FieldValue]
 
-failure :: Int -> Text -> Result a
-failure n = Left . Diagnostic n 1
+-- | A section inside a list of fields: position, name, arguments, and contents.
+data SectionInfo = SectionInfo Position Text [SectionArg] [Field]
 
-space :: Parser ()
-space = L.space space1 empty empty
+failAt :: Position -> Text -> Result a
+failAt (Position r c) = Left . Diagnostic r c
 
-symbol :: Text -> Parser Text
-symbol = L.symbol space
-
-lexeme :: Parser a -> Parser a
-lexeme = L.lexeme space
-
-value :: Int -> Parser a -> Text -> Result a
-value n p input = case runParser (space *> p <* eof) "field" input of
-  Left e -> failure n (T.pack (errorBundlePretty e))
-  Right x -> Right x
-
-name :: Parser Text
-name = lexeme (T.pack <$> some (satisfy (\c -> isAscii c && (isAlphaNum c || c == '-' || c == '_'))))
-
-packageNameParser :: Parser Text
-packageNameParser = do
-  x <- name
-  unless (not ("_" `T.isInfixOf` x) && all (\part -> not (T.null part) && T.any isLetter part) (T.splitOn "-" x))
-    (fail "Invalid package name")
-  pure x
-
-bool :: Parser Bool
-bool = True <$ lexeme (string' "True") <|> False <$ lexeme (string' "False")
-
-token :: Parser Text
-token = lexeme (quoted <|> bare)
-  where
-    quoted = T.pack <$> (char '"' *> manyTill L.charLiteral (char '"'))
-    bare = T.pack <$> some (satisfy (\c -> not (isSpace c) && c /= ',' && c /= '"'))
-
-items :: Parser [Text]
-items = optional (symbol ",") *> many (token <* optional (symbol ","))
-
-conditionParser :: Parser Condition
-conditionParser = makeExprParser atom
-  [ [Prefix (Not <$ symbol "!")]
-  , [InfixL (And <$ symbol "&&")]
-  , [InfixL (Or <$ symbol "||")]
-  ]
-  where
-    atom = between (symbol "(") (symbol ")") conditionParser
-      <|> Literal <$> bool
-      <|> call "os" (OS . T.toLower <$> name)
-      <|> call "arch" (Arch . T.toLower <$> name)
-      <|> call "flag" (FlagValue . T.toLower <$> name)
-      <|> call "impl" (Impl . T.toLower <$> name <*> (fromMaybe anyVersion <$> optional conditionRangeParser))
-    call key p = symbol key *> between (symbol "(") (symbol ")") p
-
-dependencyParser :: Parser Dependency
-dependencyParser = do
-  pkg <- packageNameParser
-  libs <- optional (symbol ":" *> targets)
-  range <- fromMaybe anyVersion <$> optional rangeParser
-  pure (Dependency pkg range (fromMaybe (MainLibrary :| []) libs))
-  where
-    targets = (NE.fromList <$> between (symbol "{") (symbol "}") (target `sepBy1` symbol ","))
-      <|> ((:| []) <$> target)
-    target = NamedLibrary <$> name
-
-toolParser :: Bool -> Parser ToolDependency
-toolParser modern = do
-  first <- if modern then packageNameParser else name
-  exe <- if modern then Just <$> (symbol ":" *> name) else pure Nothing
-  range <- fromMaybe anyVersion <$> optional rangeParser
-  pure (case exe of
-    Nothing -> ToolDependency Nothing first range
-    Just x -> ToolDependency (Just first) x range)
-
--- | Read indentation before field values. A comment occupies a complete line.
-layout :: BS.ByteString -> Result [Node]
-layout bytes = do
-  text <- case TE.decodeUtf8' bytes of
-    Left _ -> failure 1 "Invalid UTF-8 input"
-    Right x -> Right (T.dropWhile (== '\xfeff') x)
-  lines' <- fmap concat (mapM prepare (zip [1..] (T.lines text)))
-  case lines' of
-    [] -> Right []
-    Line n indent _ : _ | indent /= 0 -> failure n "Use column 1 for package fields"
-    _ -> fst <$> block 0 lines'
-  where
-    prepare (n, raw) =
-      let prefix = T.takeWhile (\c -> c == ' ' || c == '\t') raw
-          content = T.dropWhileEnd (== '\r') (T.drop (T.length prefix) raw)
-      in if T.null (T.strip content) || "--" `T.isPrefixOf` content then Right []
-         else if T.any (== '\t') prefix then failure n "Tabs in indentation are not supported"
-         else Right [Line n (T.length prefix) content]
-    block _ [] = Right ([], [])
-    block indent allLines@(Line n current content : rest)
-      | current < indent = Right ([], allLines)
-      | current > indent = failure n "Invalid indentation"
-      | otherwise = do
-          let (children, after) = span (\(Line _ i _) -> i > indent) rest
-              (key, suffix) = T.breakOn ":" content
-              isField = not (T.null suffix) && not (T.null key)
-                && T.all (\c -> isAlphaNum c || c == '-' || c == '_') key
-          node <- if isField
-            then Right (Field n (T.toLower key)
-              (T.intercalate "\n" (T.stripStart (T.drop 1 suffix) : [t | Line _ _ t <- children])))
-            else do
-              when (T.any (`elem` ("{};" :: String)) content)
-                (failure n "Explicit braces and semicolons are not supported")
-              nested <- case children of
-                [] -> Right []
-                Line _ i _ : _ -> do
-                  (nestedNodes, remaining) <- block i children
-                  case remaining of
-                    Line m _ _ : _ -> failure m "Invalid indentation"
-                    [] -> Right nestedNodes
-              Right (Section n (T.stripEnd content) nested)
-          (nodes, remaining) <- block indent after
-          Right (node : nodes, remaining)
+zeroPosition :: Position
+zeroPosition = Position 0 0
 
 report :: Result a -> ParseResult a
 report = ParseResult [] . either (Left . (:| [])) Right
 
+-- | Decode UTF-8 text. For invalid input, use the Cabal-syntax decoder: it
+-- replaces each invalid sequence with U+FFFD and continues.
+decode :: BS.ByteString -> Text
+decode bytes = either (const (T.pack (lenient (BS.unpack bytes)))) id (TE.decodeUtf8' bytes)
+  where
+    lenient [] = []
+    lenient (c : cs)
+      | c <= 0x7f = toEnum (fromIntegral c) : lenient cs
+      | c <= 0xbf = replacement : lenient cs
+      | c <= 0xdf = case cs of
+          c1 : rest | c1 .&. 0xc0 == 0x80 ->
+            let d = (fromIntegral (c .&. 0x1f) `shiftL` 6) .|. fromIntegral (c1 .&. 0x3f)
+            in (if d >= 0x80 then toEnum d else replacement) : lenient rest
+          _ -> replacement : lenient cs
+      | c <= 0xef = more (3 :: Int) 0x800 cs (fromIntegral (c .&. 0xf))
+      | c <= 0xf7 = more 4 0x10000 cs (fromIntegral (c .&. 0x7))
+      | c <= 0xfb = more 5 0x200000 cs (fromIntegral (c .&. 0x3))
+      | c <= 0xfd = more 6 0x4000000 cs (fromIntegral (c .&. 0x1))
+      | otherwise = replacement : lenient cs
+    more 1 overlong cs acc
+      | overlong <= acc && acc <= 0x10ffff && (acc < 0xd800 || 0xdfff < acc) = toEnum acc : lenient cs
+      | otherwise = replacement : lenient cs
+    more n overlong (c : cs) acc
+      | c .&. 0xc0 == 0x80 = more (n - 1) overlong cs ((acc `shiftL` 6) .|. fromIntegral (c .&. 0x3f))
+    more _ _ cs _ = replacement : lenient cs
+    replacement = '\xfffd' 
+
+readInput :: BS.ByteString -> Result [Field]
+readInput bytes = readFields (fromMaybe text (T.stripPrefix "\xfeff" text))
+  where text = decode bytes
+
+parseField :: Parser a -> FieldValue -> Result a
+parseField p fv = either (failAt (fieldPosition fv)) Right (runValue p (fieldText fv))
+
+-- | A singular field. The last value wins. As in Cabal-syntax, the first of
+-- several values is not parsed.
+singular :: (FieldValue -> Result a) -> [FieldValue] -> Result (Maybe a)
+singular _ [] = Right Nothing
+singular f [x] = Just <$> f x
+singular f (_ : xs) = Just . last <$> mapM f xs
+
+-- | A singular field that has no value when its text is empty.
+optionalField :: Parser a -> [FieldValue] -> Result (Maybe a)
+optionalField p = fmap (>>= id) . singular one
+  where one fv = if null (fieldLines fv) then Right Nothing else Just <$> parseField p fv
+
+monoidal :: Parser [a] -> [FieldValue] -> Result [a]
+monoidal p = fmap concat . mapM (parseField p)
+
+takeFields :: [Field] -> (Fields, [Field])
+takeFields fields = (collect [(n, FieldValue p ls) | Field p n ls <- leading], rest)
+  where (leading, rest) = span isField fields
+
+isField :: Field -> Bool
+isField Field {} = True
+isField Section {} = False
+
+collect :: [(Text, FieldValue)] -> Fields
+collect xs = Map.fromListWith (flip (++)) [(k, [v]) | (k, v) <- xs]
+
+-- | Separate fields from sections. Consecutive sections form one group.
+partitionFields :: [Field] -> (Fields, [[SectionInfo]])
+partitionFields fields = (collect [(n, FieldValue p ls) | Field p n ls <- fields], groups fields)
+  where
+    groups xs = case dropWhile isField xs of
+      [] -> []
+      ys -> let (ss, rest) = break isField ys
+            in [SectionInfo p n a b | Section p n a b <- ss] : groups rest
+
+-- | Fields of a section that cannot contain sections.
+plainFields :: [Field] -> Result Fields
+plainFields body = case sections of
+  SectionInfo p n _ _ : _ -> failAt p ("invalid subsection " <> T.pack (show n))
+  [] -> Right fs
+  where (fs, sections) = fmap concat (partitionFields body)
+
+-- | Cabal-syntax gives free text with two sets of rules. From cabal-version
+-- 3.0, it keeps blank lines and relative indentation.
+freeText :: Version -> FieldValue -> Text
+freeText spec (FieldValue pos ls) = case ls of
+  [] -> ""
+  _ | specAtLeast [3, 0] spec -> freeText3 pos ls
+  [FieldLine _ "."] -> "."
+  _ -> T.intercalate "\n" [if t == "." then "" else t | FieldLine _ x <- ls, let t = T.strip x]
+
+freeText3 :: Position -> [FieldLine] -> Text
+freeText3 _ [] = ""
+freeText3 _ [FieldLine _ x] = x
+freeText3 pos (FieldLine p1 x1 : rest@(FieldLine p2 _ : _))
+  | positionRow pos == positionRow p1 = T.concat (x1 : lines' (minimum (column p1 : column p2 : map lineColumn rest)))
+  | otherwise =
+      let c = minimum (column p1 : map lineColumn rest)
+      in T.concat (T.replicate (column p1 - c) " " : x1 : lines' c)
+  where
+    column = positionColumn
+    lineColumn = column . fieldLinePosition
+    lines' c = zipWith (line c) (p1 : map fieldLinePosition rest) rest
+    line c previous (FieldLine q x) =
+      T.replicate (positionRow q - positionRow previous) "\n" <> T.replicate (column q - c) " " <> x
+
+-- | The Cabal specification version for version digits, or 'Nothing' for an
+-- unknown version.
+knownSpec :: NonEmpty Integer -> Maybe Version
+knownSpec ds = case NE.toList ds of
+  v | v `elem` [[3, 14], [3, 12], [3, 8], [3, 6], [3, 4], [3, 0], [2, 4], [2, 2], [2, 0]] -> Just (specVersion v)
+    | v >= [1, 25] -> Nothing
+    | otherwise -> specVersion . snd <$> find ((v >=) . fst) older
+  where
+    older =
+      [ ([1, 23], [1, 24]), ([1, 21], [1, 22]), ([1, 19], [1, 20]), ([1, 17], [1, 18])
+      , ([1, 11], [1, 12]), ([1, 9], [1, 10]), ([1, 7], [1, 8]), ([1, 5], [1, 6])
+      , ([1, 3], [1, 4]), ([1, 1], [1, 2]), ([], [1, 0]) ]
+
+-- | The value of a @cabal-version@ field: a version or a range.
+specVersionParser :: Version -> Parser Version
+specVersionParser spec = do
+  v <- versionParser <|> range
+  maybe (fail ("Unknown cabal spec version specified: " ++ T.unpack (renderVersion v))) pure (knownSpec (versionNumbers v))
+  where
+    range = do
+      v <- lowestVersion <$> rangeParser spec
+      when (v >= specVersion [2, 1]) (fail "cabal-version higher than 2.2 cannot be specified as a range")
+      pure v
+
+-- | The smallest lower bound of a range. An empty range gives version 0.
+lowestVersion :: VersionRange -> Version
+lowestVersion range = case [v | ((v, _), _) <- intervals range] of
+  [] -> zero
+  vs -> minimum vs
+  where
+    zero = specVersion [0]
+    intervals r = case r of
+      AnyVersion -> [((zero, True), Nothing)]
+      Equal v -> [((v, True), Just (v, True))]
+      Later v -> [((v, False), Nothing)]
+      AtLeast v -> [((v, True), Nothing)]
+      Earlier v -> nonEmpty ((zero, True), Just (v, False))
+      AtMost v -> [((zero, True), Just (v, True))]
+      MajorBound v -> intervals (Both (AtLeast v) (Earlier (majorUpper v)))
+      Both a b -> concat [nonEmpty (maxLower l1 l2, minUpper u1 u2) | (l1, u1) <- intervals a, (l2, u2) <- intervals b]
+      EitherRange a b -> intervals a ++ intervals b
+    nonEmpty i@((l, li), u) = case u of
+      Nothing -> [i]
+      Just (h, hi) | l < h || (l == h && li && hi) -> [i]
+                   | otherwise -> []
+    maxLower a@(v, i) b@(w, j)
+      | v /= w = if v > w then a else b
+      | otherwise = (v, i && j)
+    minUpper Nothing u = u
+    minUpper u Nothing = u
+    minUpper (Just a@(v, i)) (Just b@(w, j))
+      | v /= w = Just (if v < w then a else b)
+      | otherwise = Just (v, i && j)
+    majorUpper v = case NE.toList (versionNumbers v) of
+      [x] -> specVersion [x, 1]
+      x : y : _ -> specVersion [x, y + 1]
+      [] -> zero
+
+-- | Read the version on the first line, as in @cabal-version: 3.0@.
+scanSpecVersion :: BS.ByteString -> Maybe Version
+scanSpecVersion bytes = do
+  line : _ <- Just (BS8.lines bytes)
+  let normalized = BS.map lower (BS.filter (/= 0x20) line)
+  [key, text] <- Just (BS8.split ':' normalized)
+  guard (key == "cabal-version")
+  v <- either (const Nothing) Just (runParser (versionParser <* space <* eof) "" (decode text))
+  guard (length (versionNumbers v) `elem` [2, 3])
+  pure v
+  where
+    lower w = if w > 0x40 && w < 0x5b then w + 0x20 else w
+
+-- | Change a file without sections to the section format.
+sectionize :: [Field] -> [Field]
+sectionize fields
+  | not (all isField fields) = fields
+  | otherwise = header ++ library ++ executables exes0
+  where
+    name (Field _ n _) = n
+    name (Section _ n _ _) = n
+    (header0, exes0) = break ((== "executable") . name) fields
+    (header, libraryFields0) = partition ((`notElem` libraryFieldNames) . name) header0
+    (deps, libraryFields) = partition ((== "build-depends") . name) libraryFields0
+    library = case libraryFields of
+      [] -> []
+      f : _ -> [Section (fieldPos f) "library" [] (deps ++ libraryFields)]
+    executables (Field p "executable" ls : rest) =
+      let (body, after) = break ((== "executable") . name) rest
+          exeName = T.dropWhile (== ' ') (T.dropWhileEnd (== ' ') (T.intercalate "\n" (map fieldLineText ls)))
+      in Section p "executable" [ArgName p exeName] (deps ++ body) : executables after
+    executables _ = []
+    fieldPos (Field p _ _) = p
+    fieldPos (Section p _ _ _) = p
+
+-- | Fields of the build information grammar of Cabal-syntax.
+buildInfoFieldNames :: [Text]
+buildInfoFieldNames =
+  [ "buildable", "build-tools", "build-tool-depends", "cpp-options", "asm-options", "cmm-options"
+  , "cc-options", "cxx-options", "ld-options", "hsc2hs-options", "pkgconfig-depends", "frameworks"
+  , "extra-framework-dirs", "asm-sources", "cmm-sources", "c-sources", "cxx-sources", "js-sources"
+  , "hs-source-dirs", "hs-source-dir", "other-modules", "virtual-modules", "autogen-modules"
+  , "default-language", "other-languages", "default-extensions", "other-extensions", "extensions"
+  , "extra-libraries", "extra-libraries-static", "extra-ghci-libraries", "extra-bundled-libraries"
+  , "extra-library-flavours", "extra-dynamic-library-flavours", "extra-lib-dirs"
+  , "extra-lib-dirs-static", "include-dirs", "includes", "autogen-includes", "install-includes"
+  , "ghc-options", "ghcjs-options", "jhc-options", "hugs-options", "nhc98-options"
+  , "ghc-prof-options", "ghcjs-prof-options", "ghc-shared-options", "ghcjs-shared-options"
+  , "build-depends", "mixins" ]
+
+libraryFieldNames :: [Text]
+libraryFieldNames = ["exposed-modules", "reexported-modules", "signatures", "exposed"] ++ buildInfoFieldNames
+
+data Kind = CommonKind | LibraryKind | ExecutableKind | TestKind | BenchmarkKind | ForeignKind
+  deriving Eq
+
+type Commons = Map Text (Conditional BuildInfo)
+
+mergeTree :: Conditional BuildInfo -> Conditional BuildInfo -> Conditional BuildInfo
+mergeTree (Conditional a bs) (Conditional b cs) = Conditional (mergeBuildInfo a b) (bs ++ cs)
+
+isImport :: Field -> Bool
+isImport (Field _ "import" _) = True
+isImport _ = False
+
+-- | Read the imports at the start of a list of fields. Cabal-syntax ignores
+-- the other imports with a warning.
+imports :: Version -> Commons -> [Field] -> Result ([Conditional BuildInfo], [Field])
+imports spec commons
+  | specAtLeast [2, 2] spec = go []
+  | otherwise = \fields -> Right ([], filter (not . isImport) fields)
+  where
+    go acc (Field p "import" ls : rest) = do
+      names <- parseField (commaList spec token) (FieldValue p ls)
+      trees <- mapM (\n -> maybe (failAt p ("Undefined common stanza imported: " <> n)) Right (Map.lookup n commons)) names
+      go (acc ++ trees) rest
+    go acc rest = Right (acc, filter (not . isImport) rest)
+
+stanza :: Version -> Kind -> Commons -> [Field] -> Result (Conditional BuildInfo)
+stanza spec kind commons fields = do
+  (imported, rest) <- imports spec commons fields
+  tree <- condTree spec kind commons rest
+  pure (foldr mergeTree tree imported)
+
+condTree :: Version -> Kind -> Commons -> [Field] -> Result (Conditional BuildInfo)
+condTree spec kind commons fields0 = do
+  (imported, fields) <- if specAtLeast [3, 0] spec
+    then imports spec commons fields0
+    else Right ([], filter (not . isImport) fields0)
+  let (fs, groups) = partitionFields fields
+  info <- buildInfoFields spec kind fs
+  branches' <- concat <$> mapM ifs groups
+  pure (foldr mergeTree (Conditional info branches') imported)
+  where
+    subtree = condTree spec kind commons
+    ifs [] = Right []
+    ifs (SectionInfo p "if" args body : rest) = do
+      c <- conditionAt p args
+      yes <- subtree body
+      (no, rest') <- elses rest
+      pure (Branch c yes no : rest')
+    ifs (_ : rest) = ifs rest
+    elses (SectionInfo p "else" args body : rest) = do
+      unless (null args) (failAt p "`else` section has section arguments")
+      no <- subtree body
+      rest' <- ifs rest
+      pure (Just no, rest')
+    elses (SectionInfo p "elif" args body : rest)
+      | specAtLeast [2, 2] spec = do
+          c <- conditionAt p args
+          yes <- subtree body
+          (no, rest') <- elses rest
+          pure (Just (Conditional emptyBuildInfo [Branch c yes no]), rest')
+      | otherwise = (,) Nothing <$> ifs rest
+    elses rest = (,) Nothing <$> ifs rest
+    conditionAt p args = maybe (failAt p "Invalid condition") Right (parseCondition args)
+
+-- | Parse the fields of one section level. Fields that the Cabal
+-- specification version does not support are ignored.
+buildInfoFields :: Version -> Kind -> Fields -> Result BuildInfo
+buildInfoFields spec kind fs = do
+  mapM_ removed [([3, 0], "hs-source-dir"), ([3, 0], "extensions"), ([3, 0], "build-tools")]
+  buildable' <- singular (parseField bool) (get "buildable")
+  dirs <- monoidal (spaceList spec sourceDir) (get "hs-source-dirs")
+  oldDirs <- monoidal (spaceList spec sourceDir) (get "hs-source-dir")
+  exposed <- if kind == LibraryKind then modules (get "exposed-modules") else pure []
+  other <- modules (get "other-modules")
+  autogen <- modules (since [2, 0] "autogen-modules")
+  virtual <- modules (since [2, 2] "virtual-modules")
+  main <- if kind `elem` [ExecutableKind, TestKind, BenchmarkKind]
+    then optionalField filePath (get "main-is") else pure Nothing
+  language <- optionalField (quoted languageName) (since [1, 10] "default-language")
+  otherLanguages' <- names (since [1, 10] "other-languages")
+  extensions' <- names (since [1, 10] "default-extensions")
+  otherExtensions' <- names (get "other-extensions")
+  legacy <- names (get "extensions")
+  deps <- monoidal (commaList spec (dependency spec)) (get "build-depends")
+  mixins' <- monoidal (commaList spec (mixin spec)) (since [2, 0] "mixins")
+  legacyTools <- monoidal (commaList spec (legacyExeDependency spec)) (get "build-tools")
+  tools <- monoidal (commaList spec (exeDependency spec)) (get "build-tool-depends")
+  cs <- paths (get "c-sources")
+  cxx <- paths (since [2, 2] "cxx-sources")
+  asm <- paths (since [3, 0] "asm-sources")
+  cmm <- paths (since [3, 0] "cmm-sources")
+  js <- paths (get "js-sources")
+  includeDirs' <- paths (get "include-dirs")
+  includes' <- paths (get "includes")
+  installIncludes' <- paths (get "install-includes")
+  autogenIncludes' <- paths (since [3, 0] "autogen-includes")
+  libDirs <- paths (get "extra-lib-dirs")
+  staticLibDirs <- paths (since [3, 8] "extra-lib-dirs-static")
+  frameworks' <- monoidal (spaceList spec token) (get "frameworks")
+  frameworkDirs <- paths (get "extra-framework-dirs")
+  cpp <- options (get "cpp-options")
+  cc <- options (get "cc-options")
+  cxxOpts <- options (since [2, 2] "cxx-options")
+  ghc <- options (get "ghc-options")
+  pure BuildInfo
+    { buildable = buildable', sourceDirs = map T.unpack (dirs ++ oldDirs), exposedModules = exposed
+    , otherModules = other, autogenModules = autogen, virtualModules = virtual
+    , mainIs = T.unpack <$> main, defaultLanguage = language, otherLanguages = otherLanguages'
+    , extensions = extensions', otherExtensions = otherExtensions', legacyExtensions = legacy
+    , dependencies = deps, mixins = mixins', buildTools = legacyTools ++ tools, cSources = map T.unpack cs
+    , cxxSources = map T.unpack cxx, asmSources = map T.unpack asm, cmmSources = map T.unpack cmm
+    , jsSources = map T.unpack js, includeDirs = map T.unpack includeDirs'
+    , includes = map T.unpack includes', installIncludes = map T.unpack installIncludes'
+    , autogenIncludes = map T.unpack autogenIncludes', extraLibDirs = map T.unpack libDirs
+    , extraLibDirsStatic = map T.unpack staticLibDirs, frameworks = frameworks'
+    , extraFrameworkDirs = map T.unpack frameworkDirs, cppOptions = cpp, ccOptions = cc
+    , cxxOptions = cxxOpts, ghcOptions = ghc, extraFields = rest
+    }
+  where
+    get k = Map.findWithDefault [] k fs
+    since v k = if specAtLeast v spec then get k else []
+    removed (v, k) = case get k of
+      fv : _ | specAtLeast v spec ->
+        failAt (fieldPosition fv) ("The field " <> k <> " is removed in cabal-version " <> renderVersion (specVersion v))
+      _ -> Right ()
+    modules = monoidal (spaceList spec (quoted moduleName))
+    names = monoidal (spaceList spec (quoted languageName))
+    paths = monoidal (spaceList spec filePath)
+    options = monoidal (optionList token')
+    typed = typedFields ++ ["exposed-modules" | kind == LibraryKind]
+      ++ ["main-is" | kind `elem` [ExecutableKind, TestKind, BenchmarkKind]]
+    rest = Map.filterWithKey keep fs
+    keep k _
+      | k `elem` typed = False
+      | kind == CommonKind = k `elem` buildInfoFieldNames || "x-" `T.isPrefixOf` k
+      | otherwise = True
+
+typedFields :: [Text]
+typedFields =
+  [ "buildable", "hs-source-dirs", "hs-source-dir", "other-modules", "autogen-modules"
+  , "virtual-modules", "default-language", "other-languages", "default-extensions"
+  , "other-extensions", "extensions", "build-depends", "mixins", "build-tools", "build-tool-depends"
+  , "c-sources", "cxx-sources", "asm-sources", "cmm-sources", "js-sources", "include-dirs"
+  , "includes", "install-includes", "autogen-includes", "extra-lib-dirs", "extra-lib-dirs-static"
+  , "frameworks", "extra-framework-dirs", "cpp-options", "cc-options", "cxx-options", "ghc-options" ]
+
+-- | The name argument of a component, common stanza, or flag section.
+sectionName :: Position -> [SectionArg] -> Result Text
+sectionName p args = case args of
+  [ArgName _ x] -> Right x
+  [ArgString _ x] -> Right x
+  [] -> failAt p "name required"
+  _ -> failAt p "Invalid name"
+
+data State = State
+  { stateCommons :: Commons
+  , stateFlags :: [Flag]
+  , stateComponents :: [Component (Conditional BuildInfo)]
+  , stateRepositories :: [SourceRepository]
+  , stateSetup :: Maybe [Dependency]
+  }
+
 parsePackage :: BS.ByteString -> ParseResult Package
 parsePackage bytes = report $ do
-  nodes <- layout bytes
-  let fields = [(n, k, v) | Field n k v <- nodes]
-      sections = [(n, k, v) | Section n k v <- nodes]
-  -- Cabal accepts most repeated package fields with a warning.
-  ensureUnique [(n, k) | (n,k,_) <- fields, k `elem` ["name", "version", "cabal-version"]]
-  (nameLine, pkgText) <- required "name" fields
-  pkg <- value nameLine packageNameParser pkgText
-  (versionLine, versionText) <- required "version" fields
-  version <- value versionLine (lexeme versionParser) versionText
-  (specLine, specText) <- required "cabal-version" fields
-  spec <- value specLine (optional (symbol ">=") *> lexeme versionParser) specText
-  exactFrom <- versionAt "2.2"
-  when (">=" `T.isPrefixOf` T.strip specText && spec >= exactFrom)
-    (failure specLine "Use an exact cabal-version from 2.2")
-  lower <- versionAt "1.0"
-  upper <- versionAt "3.14"
-  unless (spec >= lower && spec <= upper)
-    (failure specLine "Supported Cabal format versions are 1.0 through 3.14")
-  let topFields = Map.fromListWith (flip (++)) [(k,[v]) | (_,k,v) <- fields]
-      hasSetup = any (\(_,k,_) -> T.toLower k == "custom-setup") sections
-      bt = fromMaybe (if hasSetup then "Custom" else "Simple") (lookupField "build-type" fields)
-  unless (bt `elem` ["Simple", "Configure", "Custom", "Make", "Hooks"])
-    (failure 1 "Invalid build-type")
-  (_, flags, components, repositories) <- foldM (section spec) (Map.empty, [], [], []) sections
-  ensureUnique [(1, flagName f) | f <- flags]
-  ensureUnique [(1, T.pack (show (componentKind c))) | c <- components]
-  let knownFlags = map flagName flags
+  fields0 <- readInput bytes
+  let (top, sections) = takeFields (sectionize fields0)
+      get k = Map.findWithDefault [] k top
+  spec <- case scanSpecVersion bytes of
+    Just v -> maybe (failAt zeroPosition "Unsupported cabal format version") Right (knownSpec (versionNumbers v))
+    Nothing -> case get "cabal-version" of
+      [] -> Right (specVersion [1, 0])
+      values -> do
+        v <- parseField (specVersionParser (specVersion [1, 24])) (last values)
+        when (v >= specVersion [2, 2]) (failAt (fieldPosition (last values))
+          "cabal-version should be at the beginning of the file starting with spec version 2.2")
+        pure v
+  parsedSpec <- optionalField (specVersionParser spec) (get "cabal-version")
+  unless (fromMaybe (specVersion [1, 0]) parsedSpec == spec)
+    (failAt zeroPosition "Scanned and parsed cabal-versions don't match")
+  pkg <- required "name" componentName top
+  version <- required "version" versionParser top
+  rawBuildType <- optionalField (buildTypeValue spec) (get "build-type")
+  State _ flags components repositories setup <- foldM (section spec) (State Map.empty [] [] [] Nothing) sections
+  let bt = fromMaybe (if specAtLeast [2, 2] spec && not (isJust setup) then "Simple" else "Custom") rawBuildType
+      knownFlags = map flagName flags
+  when (bt == "Custom" && not (isJust setup) && specAtLeast [1, 24] spec)
+    (failAt zeroPosition "Since cabal-version: 1.24 specifying custom-setup section is mandatory")
   mapM_ (checkFlags knownFlags . componentData) components
-  noShadowing <- versionAt "3.4"
-  -- From cabal-version 3.4, a dependency name always identifies a package.
-  let libraries = [x | spec < noShadowing, Component (Library (Just x)) _ <- components]
-      normalized = map (normalizeComponent pkg libraries) components
-  pure (Package pkg version spec bt flags normalized topFields repositories)
+  let libraries = [x | not (specAtLeast [3, 4] spec), Component (Library (Just x)) _ <- components]
+      internal = internalDependencies pkg libraries
+      internalMixin m
+        | mixinPackage m `elem` libraries, mixinLibrary m == MainLibrary =
+            m {mixinPackage = pkg, mixinLibrary = if mixinPackage m == pkg then MainLibrary else NamedLibrary (mixinPackage m)}
+        | otherwise = m
+  pure Package
+    { packageName = pkg, packageVersion = version, cabalVersion = spec, buildType = bt
+    , packageFlags = flags
+    , packageComponents =
+        [ Component k (mapTree (\bi -> bi {dependencies = internal (dependencies bi), mixins = map internalMixin (mixins bi)}) t)
+        | Component k t <- components ]
+    , packageFields = top, packageSourceRepositories = repositories
+    , packageSetupDependencies = internal <$> setup
+    }
+
+required :: Text -> Parser a -> Fields -> Result a
+required key p fields = do
+  value <- singular (parseField p) (Map.findWithDefault [] key fields)
+  maybe (failAt zeroPosition (T.pack (show key) <> " field missing")) Right value
+
+section :: Version -> State -> Field -> Result State
+section _ st Field {} = Right st
+section spec st (Section p name args body) = case name of
+  "common"
+    | not (specAtLeast [2, 2] spec) -> Right st
+    | otherwise -> do
+        key <- sectionName p args
+        tree <- stanza spec CommonKind commons body
+        when (Map.member key commons) (failAt p ("Duplicate common stanza: " <> key))
+        Right st {stateCommons = Map.insert key tree commons}
+  "library"
+    | null args -> do
+        when (any isMainLibrary (stateComponents st))
+          (failAt p "Multiple main libraries; have you forgotten to specify a name for an internal library?")
+        component (Library Nothing) LibraryKind
+    | otherwise -> sectionName p args >>= \n -> component (Library (Just n)) LibraryKind
+  "foreign-library" -> sectionName p args >>= \n -> component (ForeignLibrary n) ForeignKind
+  "executable" -> sectionName p args >>= \n -> component (Executable n) ExecutableKind
+  "test-suite" -> sectionName p args >>= \n -> component (TestSuite n) TestKind
+  "benchmark" -> sectionName p args >>= \n -> component (Benchmark n) BenchmarkKind
+  "flag" -> do
+    n <- sectionName p args
+    key <- either (failAt p) Right (runValue flagNameValue n)
+    fields <- plainFields body
+    let get k = Map.findWithDefault [] k fields
+    def <- singular (parseField bool) (get "default")
+    manual <- singular (parseField bool) (get "manual")
+    let description = maybe "" (freeText spec . last) (nonEmpty (get "description"))
+    Right st {stateFlags = stateFlags st ++ [Flag key (fromMaybe True def) (fromMaybe False manual) description]}
+  "custom-setup" | null args -> do
+    fields <- plainFields body
+    deps <- monoidal (commaList spec (dependency spec)) (Map.findWithDefault [] "setup-depends" fields)
+    Right st {stateSetup = Just deps}
+  "source-repository" -> case args of
+    [ArgName q kind] -> do
+      kind' <- either (failAt q) Right (runValue (takeWhile1P Nothing (\c -> isAlphaNum c || c == '_' || c == '-')) kind)
+      fields <- plainFields body
+      Right st {stateRepositories = stateRepositories st ++ [SourceRepository kind' fields]}
+    [] -> failAt p "'source-repository' requires exactly one argument"
+    _ -> failAt p "Invalid source-repository kind"
+  _ -> Right st
   where
-    versionAt t = either (failure 1) Right (parseVersion t)
-    section spec (commons, flags, components, repositories) (n, header, body) = do
-      let ws = case T.words header of { k:ks -> T.toLower k : ks; [] -> [] }
-      case ws of
-        ["common", key] -> do
-          gate n spec "2.2" "common"
-          when (Map.member key commons) (failure n "Duplicate common stanza")
-          tree <- buildTree spec commons body
-          pure (Map.insert key tree commons, flags, components, repositories)
-        ["flag", key] -> do
-          flag <- readFlag n key body
-          pure (commons, flags ++ [flag], components, repositories)
-        ["custom-setup"] -> pure (commons, flags, components, repositories)
-        ["source-repository", kind] -> do
-          repository <- readSourceRepository kind body
-          pure (commons, flags, components, repositories ++ [repository])
-        _ -> do
-          kind <- case ws of
-            ["library"] -> Right (Library Nothing)
-            ["library", key] -> gate n spec "2.0" "named library" *> (Library . Just <$> value n name key)
-            ["executable", key] -> Executable <$> value n name key
-            ["test-suite", key] -> TestSuite <$> value n name key
-            ["benchmark", key] -> Benchmark <$> value n name key
-            ["foreign-library", key] -> ForeignLibrary <$> value n name key
-            _ -> failure n ("Unsupported section: " <> header)
-          tree <- buildTree spec commons body
-          pure (commons, flags, components ++ [Component kind tree], repositories)
+    commons = stateCommons st
+    component kind grammar = do
+      tree <- stanza spec grammar commons body
+      Right st {stateComponents = stateComponents st ++ [Component kind tree]}
+    isMainLibrary (Component (Library Nothing) _) = True
+    isMainLibrary _ = False
+    nonEmpty [] = Nothing
+    nonEmpty xs = Just xs
 
-readSourceRepository :: Text -> [Node] -> Result SourceRepository
-readSourceRepository kind body = SourceRepository kind <$> foldM field Map.empty body
+mapTree :: (BuildInfo -> BuildInfo) -> Conditional BuildInfo -> Conditional BuildInfo
+mapTree f (Conditional bi bs) = Conditional (f bi) [Branch c (mapTree f t) (mapTree f <$> e) | Branch c t e <- bs]
+
+-- | Before cabal-version 3.4, the name of an internal library refers to that
+-- library of the same package. If the dependency also names other libraries,
+-- Cabal-syntax 3.12 keeps the original dependency after the new one.
+internalDependencies :: Text -> [Text] -> [Dependency] -> [Dependency]
+internalDependencies pkg libraries = concatMap change
   where
-    field fields (Field _ key input) = Right (Map.insertWith (flip (++)) key [input] fields)
-    field _ (Section n _ _) = failure n "A source repository cannot contain sections"
-
-required :: Text -> [(Int, Text, Text)] -> Result (Int, Text)
-required key xs = case [(n,v) | (n,k,v) <- xs, k == key] of
-  x:_ -> Right x
-  [] -> failure 1 ("Missing field: " <> key)
-
-lookupField :: Text -> [(Int, Text, Text)] -> Maybe Text
-lookupField key xs = case [v | (_,k,v) <- xs, k == key] of
-  x:_ -> Just (T.strip x)
-  [] -> Nothing
-
-ensureUnique :: [(Int, Text)] -> Result ()
-ensureUnique = go []
-  where
-    go _ [] = Right ()
-    go seen ((n,k):rest)
-      | k `elem` seen = failure n ("Duplicate name or field: " <> k)
-      | otherwise = go (k:seen) rest
-
-gate :: Int -> Version -> Text -> Text -> Result ()
-gate n spec minimumVersion feature = case parseVersion minimumVersion of
-  Right minimumSpec | spec >= minimumSpec -> Right ()
-  _ -> failure n (feature <> " requires cabal-version " <> minimumVersion)
-
-readFlag :: Int -> Text -> [Node] -> Result Flag
-readFlag n key body = do
-  key' <- T.toLower <$> value n name key
-  let fields = [(i,k,v) | Field i k v <- body]
-  unless (length fields == length body) (failure n "A flag cannot contain sections")
-  ensureUnique [(i,k) | (i,k,_) <- fields]
-  def <- maybe (Right True) (value n bool) (lookupField "default" fields)
-  manual <- maybe (Right False) (value n bool) (lookupField "manual" fields)
-  let description = fromMaybe "" (lookupField "description" fields)
-  pure (Flag key' def manual description)
-
-buildTree :: Version -> Map.Map Text (Conditional BuildInfo) -> [Node] -> Result (Conditional BuildInfo)
-buildTree spec commons = go False (Conditional emptyBuildInfo [])
-  where
-    go _ tree [] = Right tree
-    go seen tree (Field n "import" input : rest) = do
-      when seen (failure n "Put imports before other fields and conditions")
-      gate n spec "2.2" "import"
-      keys <- value n (optional (symbol ",") *> name `sepEndBy1` symbol ",") input
-      imported <- mapM (\key -> maybe (failure n ("Unknown common stanza: " <> key)) Right (Map.lookup key commons)) keys
-      go False (foldl mergeTree tree imported) rest
-    go _ tree (Field n key input : rest) = do
-      info <- buildField spec n key input
-      go True (tree {unconditional = mergeBuildInfo (unconditional tree) info}) rest
-    go _ tree (Section n header body : rest)
-      | Just expr <- conditional "if" header = do
-          (branch, after) <- ifChain n expr body rest
-          go True (tree {branches = branches tree ++ [branch]}) after
-      | otherwise = failure n ("Unsupported conditional section: " <> header)
-    -- Cabal ignores an elif section before cabal-version 2.2. It gives a warning.
-    ifChain n expr body rest = do
-      cond <- value n conditionParser expr
-      checkImportVersion n body
-      yes <- buildTree spec commons body
-      (no, after) <- elseChain rest
-      pure (Branch cond yes no, after)
-    elseChain (Section m header other : remaining)
-      | Just "" <- conditional "else" header = do
-          checkImportVersion m other
-          t <- buildTree spec commons other
-          pure (Just t, remaining)
-      | Just expr <- conditional "elif" header, spec >= elifVersion = do
-          (branch, after) <- ifChain m expr other remaining
-          pure (Just (Conditional emptyBuildInfo [branch]), after)
-      | Just _ <- conditional "elif" header = elseChain remaining
-    elseChain rest = pure (Nothing, rest)
-    elifVersion = either (error . T.unpack) id (parseVersion "2.2")
-    checkImportVersion n body = when (any isImport body) (gate n spec "3.0" "conditional import")
-    isImport (Field _ "import" _) = True
-    isImport _ = False
-    mergeTree (Conditional a bs) (Conditional b cs) = Conditional (mergeBuildInfo a b) (bs ++ cs)
-
--- | Get the argument of a conditional section header. The keyword is not
--- case-sensitive. A parenthesis can follow the keyword directly.
-conditional :: Text -> Text -> Maybe Text
-conditional keyword header
-  | T.toLower word /= keyword = Nothing
-  | T.null rest = Just ""
-  | isSpace (T.head rest) || T.head rest == '(' = Just (T.strip rest)
-  | otherwise = Nothing
-  where
-    (word, rest) = T.span isLetter header
-
-buildField :: Version -> Int -> Text -> Text -> Result BuildInfo
-buildField spec n key input
-  = case key of
-      "buildable" -> (\x -> e {buildable = Just x}) <$> value n bool input
-      "main-is" -> (\x -> e {mainIs = Just (T.unpack x)}) <$> value n token input
-      "default-language" -> (\x -> e {defaultLanguage = Just x}) <$> value n name input
-      "hs-source-dirs" -> paths (\x -> e {sourceDirs = x})
-      "exposed-modules" -> modules (\x -> e {exposedModules = x})
-      "other-modules" -> modules (\x -> e {otherModules = x})
-      "autogen-modules" -> modules (\x -> e {autogenModules = x})
-      "default-extensions" -> list (\x -> e {extensions = x})
-      "extensions" -> removed "3.0" *> list (\x -> e {legacyExtensions = x})
-      "build-depends" -> do
-        rangeGates
-        ds <- value n (optional (symbol ",") *> dependencyParser `sepEndBy` symbol ",") input
-        when (any (any isNamed . dependencyLibraries) ds) (gate n spec "3.0" "library dependency targets")
-        pure e {dependencies = ds}
-      -- Before cabal-version 2.0, Cabal gives a warning for this field and keeps it.
-      "build-tool-depends" -> do
-        rangeGates
-        ds <- value n (optional (symbol ",") *> toolParser True `sepEndBy` symbol ",") input
-        pure e {buildTools = ds}
-      "build-tools" -> do
-        removed "3.0"
-        rangeGates
-        ds <- value n (toolParser False `sepEndBy` symbol ",") input
-        pure e {buildTools = ds}
-      "c-sources" -> paths (\x -> e {cSources = x})
-      "cxx-sources" -> paths (\x -> e {cxxSources = x})
-      "include-dirs" -> paths (\x -> e {includeDirs = x})
-      "install-includes" -> paths (\x -> e {installIncludes = x})
-      "autogen-includes" -> paths (\x -> e {autogenIncludes = x})
-      "cpp-options" -> opts (\x -> e {cppOptions = x})
-      "cc-options" -> opts (\x -> e {ccOptions = x})
-      "cxx-options" -> opts (\x -> e {cxxOptions = x})
-      "ghc-options" -> opts (\x -> e {ghcOptions = x})
-      _ -> pure e {extraFields = Map.singleton key [input]}
-  where
-    e = emptyBuildInfo
-    removed v = case parseVersion v of
-      Right limit | spec >= limit -> failure n (key <> " was removed in cabal-version " <> v)
-      _ -> Right ()
-    rangeGates = do
-      when ("^>=" `T.isInfixOf` input) (gate n spec "2.0" "major version bounds")
-      when ("{" `T.isInfixOf` input) (gate n spec "3.0" "set syntax")
-      when ("," `T.isPrefixOf` T.strip input) (gate n spec "2.2" "leading comma")
-    list set = set <$> value n items input
-    paths set = list (set . map T.unpack)
-    opts set = set <$> value n (many optionToken) input
-    optionToken = lexeme (T.pack <$> (char '"' *> manyTill L.charLiteral (char '"')))
-      <|> lexeme (T.pack <$> some (satisfy (\c -> not (isSpace c) && c /= '"')))
-    modules set = do
-      xs <- value n items input
-      unless (all validModule xs) (failure n "Invalid module name")
-      pure (set xs)
-    validModule x = all validPart (T.splitOn "." x)
-    validPart x = case T.uncons x of
-      Just (c, cs) -> c >= 'A' && c <= 'Z' && T.all (\a -> isAlphaNum a || a == '_' || a == '\'') cs
-      Nothing -> False
-    isNamed MainLibrary = False
-    isNamed _ = True
+    change d@(Dependency name range libs)
+      | name `elem` libraries, MainLibrary `elem` libs =
+          Dependency pkg range (NamedLibrary name :| []) : [d | any (/= MainLibrary) libs]
+      | otherwise = [d]
 
 checkFlags :: [Text] -> Conditional BuildInfo -> Result ()
 checkFlags known tree = mapM_ check (branches tree)
   where
     check (Branch c t e) = checkCondition c *> checkFlags known t *> mapM_ (checkFlags known) e
     checkCondition c = case c of
-      FlagValue f | f `notElem` known -> failure 1 ("Unknown flag: " <> f)
+      FlagValue f | f `notElem` known -> failAt zeroPosition ("These flags are used without having been defined: " <> f)
       Not a -> checkCondition a
       And a b -> checkCondition a *> checkCondition b
       Or a b -> checkCondition a *> checkCondition b
       _ -> Right ()
 
-normalizeComponent :: Text -> [Text] -> Component (Conditional BuildInfo) -> Component (Conditional BuildInfo)
-normalizeComponent pkg libs (Component kind tree) = Component kind (go tree)
-  where
-    go (Conditional bi bs) = Conditional (bi {dependencies = map dep (dependencies bi)})
-      [Branch c (go t) (go <$> e) | Branch c t e <- bs]
-    dep d
-      | dependencyPackage d `elem` libs && dependencyLibraries d == (MainLibrary :| []) =
-          d {dependencyPackage = pkg, dependencyLibraries = NamedLibrary (dependencyPackage d) :| []}
-      | otherwise = d {dependencyLibraries = fmap (target (dependencyPackage d)) (dependencyLibraries d)}
-    target owner (NamedLibrary x) | x == owner = MainLibrary
-    target _ x = x
-
+-- | Read a @.buildinfo@ file, as Cabal-syntax reads hooked build information.
 parseBuildInfo :: BS.ByteString -> ParseResult BuildInfoFile
 parseBuildInfo bytes = report $ do
-  nodes <- layout bytes
-  spec <- either (failure 1) Right (parseVersion "3.14")
-  let (libNodes, rest) = break isExecutable nodes
-  lib <- if null libNodes then pure Nothing else Just <$> fields spec libNodes
-  exes <- groups spec rest
-  ensureUnique [(1,k) | (k,_) <- exes]
+  fields <- readInput bytes
+  let (header, rest) = break isExecutable fields
+  libraryFields <- plainFields header
+  lib <- if Map.null libraryFields then pure Nothing else Just <$> buildInfoFields latestSpec CommonKind libraryFields
+  exes <- groups rest
+  ensureUnique (map fst exes)
   pure (BuildInfoFile lib (Map.fromList exes))
   where
     isExecutable (Field _ "executable" _) = True
     isExecutable _ = False
-    fields spec = foldM (\acc node -> case node of
-      Field n k v -> mergeBuildInfo acc <$> buildField spec n k v
-      Section n _ _ -> failure n "Sections are not supported in buildinfo files") emptyBuildInfo
-    groups _ [] = Right []
-    groups spec (Field n "executable" key : rest) = do
-      exe <- value n name key
+    groups (Field p "executable" ls : rest) = do
+      exe <- parseField componentName (FieldValue p ls)
       let (body, after) = break isExecutable rest
-      bi <- fields spec body
-      ((exe, bi) :) <$> groups spec after
-    groups _ _ = failure 1 "Invalid executable buildinfo"
+      fs <- plainFields body
+      bi <- buildInfoFields latestSpec CommonKind fs
+      ((exe, bi) :) <$> groups after
+    groups _ = Right []
+    ensureUnique names = case [n | (i, n) <- zip [0 :: Int ..] names, n `elem` take i names] of
+      n : _ -> failAt zeroPosition ("Duplicate executable: " <> n)
+      [] -> Right ()

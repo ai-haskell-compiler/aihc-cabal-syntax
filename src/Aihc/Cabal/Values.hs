@@ -1,0 +1,263 @@
+{-# LANGUAGE OverloadedStrings #-}
+-- | Parsers for field values. Each parser follows the Cabal-syntax 3.12
+-- parser for the same value.
+module Aihc.Cabal.Values
+  ( runValue, token, token', filePath, sourceDir, quoted, commaList, spaceList, optionList
+  , componentName, moduleName, identifier, languageName, bool, buildTypeValue
+  , dependency, exeDependency, legacyExeDependency, mixin, flagNameValue, specAtLeast
+  ) where
+
+import Control.Applicative (optional, (<|>))
+import Control.Monad (void, when)
+import Data.Char (chr, digitToInt, isAlpha, isAlphaNum, isDigit, isHexDigit, isOctDigit, isSpace, isUpper, toLower)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (catMaybes, fromMaybe)
+import Data.Text (Text)
+import qualified Data.Text as T
+import Text.Megaparsec (between, choice, eof, errorBundlePretty, many, manyTill, option, runParser, satisfy, some, takeWhile1P, takeWhileP, try)
+import Text.Megaparsec.Char (char, space, spaceChar, string)
+import Aihc.Cabal.Types
+import Aihc.Cabal.Version
+
+specAtLeast :: [Integer] -> Version -> Bool
+specAtLeast digits spec = spec >= specVersion digits
+
+-- | Run a field parser on complete field text, as Cabal-syntax does.
+runValue :: Parser a -> Text -> Either Text a
+runValue p input = case runParser (space *> p <* space <* eof) "field" input of
+  Left err -> Left (T.pack (errorBundlePretty err))
+  Right x -> Right x
+
+-- | A Haskell string literal.
+haskellString :: Parser Text
+haskellString = T.pack . catMaybes <$> (char '"' *> manyTill stringChar (char '"'))
+  where
+    stringChar = Just <$> satisfy (\c -> c /= '"' && c /= '\\' && c > '\026') <|> (char '\\' *> escape)
+    escape = Nothing <$ (some (satisfy isSpace) *> char '\\')
+      <|> Nothing <$ char '&'
+      <|> Just <$> escapeCode
+    escapeCode = choice (map (\(c, code) -> code <$ char c) (zip "abfnrtv\\\"'" "\a\b\f\n\r\t\v\\\"'"))
+      <|> number 10 isDigit (pure ())
+      <|> number 8 isOctDigit (void (char 'o'))
+      <|> number 16 isHexDigit (void (char 'x'))
+      <|> choice [try (code <$ string name) | (name, code) <- asciiCodes]
+      <|> (char '^' *> ((\c -> chr (fromEnum c - fromEnum '@')) <$> satisfy (\c -> isUpper c || c == '@')))
+    number :: Int -> (Char -> Bool) -> Parser () -> Parser Char
+    number base valid prefix = do
+      prefix
+      ds <- some (satisfy valid)
+      let n = foldl (\a d -> a * base + digitToInt d) 0 ds
+      if n > 0x10FFFF then fail "out-of-range numeric escape sequence" else pure (chr n)
+    asciiCodes = zip
+      [ "NUL", "SOH", "STX", "ETX", "EOT", "ENQ", "ACK", "BEL", "DLE", "DC1", "DC2", "DC3", "DC4"
+      , "NAK", "SYN", "ETB", "CAN", "SUB", "ESC", "DEL", "BS", "HT", "LF", "VT", "FF", "CR", "SO"
+      , "SI", "EM", "FS", "GS", "RS", "US", "SP" ]
+      "\NUL\SOH\STX\ETX\EOT\ENQ\ACK\BEL\DLE\DC1\DC2\DC3\DC4\NAK\SYN\ETB\CAN\SUB\ESC\DEL\BS\HT\LF\VT\FF\CR\SO\SI\EM\FS\GS\RS\US\SP"
+
+-- | A string or characters other than space and comma.
+token :: Parser Text
+token = haskellString <|> takeWhile1P (Just "identifier") (\c -> not (isSpace c) && c /= ',')
+
+-- | A string or characters other than space.
+token' :: Parser Text
+token' = haskellString <|> takeWhile1P (Just "token") (not . isSpace)
+
+-- | A token that is not empty.
+filePath :: Parser Text
+filePath = do
+  x <- token
+  when (T.null x) (fail "empty FilePath")
+  pure x
+
+-- | A relative path that is not empty.
+sourceDir :: Parser Text
+sourceDir = do
+  x <- filePath
+  when (absolute (T.unpack x)) (fail "absolute FilePath")
+  pure x
+  where
+    absolute (d : ':' : s : _) = isAlpha d && (s == '\\' || s == '/')
+    absolute ('\\' : '\\' : _) = True
+    absolute ('/' : _) = True
+    absolute _ = False
+
+quoted :: Parser a -> Parser a
+quoted p = between (char '"') (char '"') p <|> p
+
+comma :: Parser ()
+comma = char ',' *> space
+
+-- | The list format of @CommaVCat@ and @CommaFSep@ fields.
+commaList :: Version -> Parser a -> Parser [a]
+commaList spec p
+  | specAtLeast [2, 2] spec = do
+      c <- optional comma
+      case c of
+        Nothing -> sepEndBy1 item comma <|> pure []
+        Just _ -> sepBy1 item comma
+  | otherwise = sepBy item comma
+  where item = p <* space
+
+-- | The list format of @VCat@ and @FSep@ fields.
+spaceList :: Version -> Parser a -> Parser [a]
+spaceList spec p
+  | specAtLeast [3, 0] spec = do
+      c <- optional comma
+      case c of
+        Nothing -> start <|> pure []
+        Just _ -> sepBy1 item comma
+  | otherwise = sepBy item (optional comma)
+  where
+    item = p <* space
+    start = do
+      x <- item
+      c <- optional comma
+      case c of
+        Nothing -> (x :) <$> many item
+        Just _ -> (x :) <$> sepEndBy item comma
+
+-- | The list format of @NoCommaFSep@ fields.
+optionList :: Parser a -> Parser [a]
+optionList p = many (p <* space)
+
+sepBy :: Parser a -> Parser s -> Parser [a]
+sepBy p s = sepBy1 p s <|> pure []
+
+sepBy1 :: Parser a -> Parser s -> Parser [a]
+sepBy1 p s = (:) <$> p <*> many (s *> p)
+
+sepEndBy :: Parser a -> Parser s -> Parser [a]
+sepEndBy p s = sepEndBy1 p s <|> pure []
+
+sepEndBy1 :: Parser a -> Parser s -> Parser [a]
+sepEndBy1 p s = do
+  x <- p
+  (s *> ((x :) <$> sepEndBy p s)) <|> pure [x]
+
+-- | A package or component name. Each part has a letter.
+componentName :: Parser Text
+componentName = T.pack <$> state0 []
+  where
+    ch = satisfy (\c -> isAlphaNum c || c == '-')
+    state0 acc = do
+      c <- ch
+      if isDigit c then state0 (c : acc)
+        else if isAlphaNum c then state1 (c : acc)
+        else fail ("Empty component, after " ++ reverse acc)
+    state1 acc = (do
+      c <- ch
+      if isAlphaNum c then state1 (c : acc) else state0 (c : acc)) <|> pure (reverse acc)
+
+moduleName :: Parser Text
+moduleName = T.pack <$> state0 []
+  where
+    state0 acc = do
+      c <- satisfy isUpper
+      state1 (c : acc)
+    state1 acc = (do
+      c <- satisfy (\c -> isAlphaNum c || c == '_' || c == '\'' || c == '.')
+      if c == '.' then state0 (c : acc) else state1 (c : acc)) <|> pure (reverse acc)
+
+-- | A name for an operating system or an architecture.
+identifier :: Parser Text
+identifier = T.cons <$> satisfy isAlpha <*> takeWhileP Nothing (\c -> isAlphaNum c || c == '_' || c == '-')
+
+languageName :: Parser Text
+languageName = takeWhile1P (Just "name") isAlphaNum
+
+bool :: Parser Bool
+bool = do
+  x <- takeWhile1P (Just "boolean") isAlpha
+  case T.toLower x of
+    "true" -> pure True
+    "false" -> pure False
+    _ -> fail ("Not a boolean: " ++ T.unpack x)
+
+-- | A build type. @Default@ is @Custom@ before cabal-version 1.20.
+buildTypeValue :: Version -> Parser Text
+buildTypeValue spec = do
+  x <- takeWhile1P (Just "build type") isAlphaNum
+  case x of
+    _ | x `elem` ["Simple", "Configure", "Custom", "Make", "Hooks"] -> pure x
+    "Default" | not (specAtLeast [1, 20] spec) -> pure "Custom"
+    _ -> fail ("unknown build-type: '" ++ T.unpack x ++ "'")
+
+flagNameValue :: Parser Text
+flagNameValue = do
+  c <- satisfy (\x -> isAlphaNum x || x == '_')
+  rest <- takeWhileP Nothing (\x -> isAlphaNum x || x == '_' || x == '-')
+  pure (T.map toLower (T.cons c rest))
+
+dependency :: Version -> Parser Dependency
+dependency spec = do
+  name <- componentName
+  libs <- optional $ do
+    _ <- char ':'
+    unless3 (fail "Sublibrary dependency syntax used")
+    ((:| []) <$> library) <|> between (char '{' *> space) (space *> char '}') libraries
+  space
+  range <- optional (rangeParser spec)
+  let targets = fromMaybe (MainLibrary :| []) libs
+      normalize (NamedLibrary x) | x == name = MainLibrary
+      normalize x = x
+  pure (Dependency name (fromMaybe anyVersion range) (fmap normalize targets))
+  where
+    unless3 failure = when (not (specAtLeast [3, 0] spec)) failure
+    library = NamedLibrary <$> componentName
+    libraries = do
+      x <- library <* space
+      xs <- many (comma *> library <* space)
+      pure (x :| xs)
+
+exeDependency :: Version -> Parser ToolDependency
+exeDependency spec = do
+  pkg <- componentName
+  _ <- char ':'
+  exe <- componentName <* space
+  range <- optional (rangeParser spec)
+  pure (ToolDependency (Just pkg) exe (fromMaybe anyVersion range))
+
+legacyExeDependency :: Version -> Parser ToolDependency
+legacyExeDependency spec = do
+  name <- quoted legacyName
+  space
+  range <- optional (quoted (rangeParser spec))
+  pure (ToolDependency Nothing name (fromMaybe anyVersion range))
+  where
+    legacyName = T.intercalate "-" <$> sepBy1 part (char '-')
+    part = do
+      x <- takeWhile1P (Just "name") (\c -> isAlphaNum c || c == '+' || c == '_')
+      if T.all isDigit x then fail "invalid component" else pure x
+
+-- | A mixin: a package, an optional library, and module renamings.
+mixin :: Version -> Parser Mixin
+mixin spec = do
+  pkg <- componentName
+  lib <- option MainLibrary $ do
+    _ <- char ':'
+    when (not (specAtLeast [3, 4] spec)) (fail "Sublibrary mixin syntax used")
+    NamedLibrary <$> componentName
+  space
+  provides <- renaming
+  requires <- option DefaultRenaming (try (space *> string "requires" *> space *> renaming))
+  let lib' = case lib of
+        NamedLibrary x | x == pkg -> MainLibrary
+        _ -> lib
+  pure (Mixin pkg lib' provides requires)
+  where
+    lax = specAtLeast [3, 0] spec
+    parens p
+      | lax = between (char '(' *> space) (char ')' *> space) p
+      | otherwise = between (char '(' *> optional (spaceChar *> fail "space after parenthesis")) (char ')') p
+    listed = if lax then moduleName <* space else moduleName
+    renaming = choice
+      [ ModuleRenaming <$> parens (sepBy entry comma) <* space
+      , HidingRenaming <$> (string "hiding" *> space *> parens (sepBy listed comma))
+      , pure DefaultRenaming ]
+    entry = do
+      old <- moduleName <* space
+      option (old, old) $ do
+        _ <- string "as"
+        _ <- some (satisfy isSpace)
+        new <- moduleName <* space
+        pure (old, new)

@@ -1,14 +1,14 @@
 {
   "outcomes": {
     "both_rejected": 4,
-    "conversion_error": 9,
+    "conversion_error": 2,
     "exception": 0,
-    "match": 173724,
-    "mismatch": 12236,
-    "parser_error": 14646,
+    "match": 200558,
+    "mismatch": 1,
+    "parser_error": 54,
     "reference_error": 23
   },
-  "parser_accepted": 185992,
+  "parser_accepted": 200584,
   "parser_with_warnings": 0,
   "reference": "Cabal-syntax",
   "reference_accepted": 200615,
