@@ -1,0 +1,8 @@
+{
+  "total": 200642,
+  "accepted": 118780,
+  "elapsed_seconds": 27.665117958094925,
+  "peak_rss_bytes": 22380544,
+  "system": "aarch64-darwin",
+  "ghc_version": "9.10.3"
+}

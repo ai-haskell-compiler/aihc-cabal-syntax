@@ -131,3 +131,20 @@ Run the required checks:
 nix build --no-update-lock-file
 nix flake check --no-update-lock-file
 ```
+
+## README measurements
+
+Run `nix run .#update-readme --no-update-lock-file` from the repository root.
+The command uses the full comparison report and measures a separate parser process.
+It writes `tests/hackage/benchmark.json` and generates `README.md` from both results.
+The Nix check requires the README to agree with the comparison and the saved measurement.
+CI does not compare elapsed time with a fixed limit.
+
+The benchmark reads the archive in order, including all revisions and rejected files.
+It forces each complete parse result through `length (show result)` before the next file.
+Thus, elapsed time includes input, parsing, result evaluation, and conversion to text.
+It excludes compilation, the reference parser, and the comparison converter.
+The measurement uses a monotonic clock and the child process peak resident set size (RSS).
+RSS includes the runtime and archive buffers. It is not the Haskell heap size.
+The saved data records the Nix system and GHC version.
+Run the update command on the same machine for performance comparisons.

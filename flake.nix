@@ -33,6 +33,22 @@
       ghc -O2 -Wall -Werror -i${./test} \
         -odir . -hidir . ${./test}/Hackage.hs -o "$out"
     '';
+    benchmark = system: let
+      pkgs = pkgsFor system;
+      compiler = pkgs.haskellPackages.ghcWithPackages (hp: [ (package system) hp.tar hp.bytestring ]);
+    in pkgs.runCommand "hackage-benchmark" { nativeBuildInputs = [ compiler ]; } ''
+      ghc -O2 -Wall -Werror -odir . -hidir . ${./test/Benchmark.hs} -o "$out"
+    '';
+    updateReadme = system: let pkgs = pkgsFor system; in
+      pkgs.writeShellApplication {
+        name = "update-readme";
+        runtimeInputs = [ pkgs.python3 ];
+        text = ''
+          python ${./scripts/readme.py} ${compliance system}/summary.json \
+            --runner ${benchmark system} --index ${corpus system}/index.tar \
+            --system ${system} --ghc-version ${pkgs.haskellPackages.ghc.version}
+        '';
+      };
     corpus = system: let
       pkgs = pkgsFor system;
       snapshot = builtins.fromJSON (builtins.readFile ./tests/hackage/snapshot.json);
@@ -63,10 +79,22 @@
   in {
     packages = each (system: {
       default = package system;
+      update-readme = updateReadme system;
       hackage-corpus = corpus system;
       hackage-compliance = compliance system;
     });
     checks = each (system: let pkgs = pkgsFor system; in {
+      readme = pkgs.runCommand "check-readme" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+        cp ${./README.md} README.md
+        mkdir -p tests/hackage
+        cp ${./tests/hackage/benchmark.json} tests/hackage/benchmark.json
+        python ${./scripts/readme.py} ${compliance system}/summary.json --check
+        touch "$out"
+      '';
+      benchmark-runner = pkgs.runCommand "check-benchmark-runner" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+        python ${./tests/hackage/check_benchmark.py} ${benchmark system}
+        touch "$out"
+      '';
       parser = package system;
       hackage-compliance = pkgs.runCommand "check-hackage-baseline" {
         nativeBuildInputs = [ pkgs.python3 ];
