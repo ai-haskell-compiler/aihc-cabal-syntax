@@ -32,12 +32,15 @@ testCompliance = do
     , "source-repository future\n  type: future\n"
     , "source-repository HEAD\n  type: GIT\n  location: https://example.com/sample\n"
     , "source-repository head\n  type: git\n  location: https://example.com/sample\n  subdir:\n"
+    , "flag fast\n  description: Use fast code\nlibrary\n  buildable: True\n"
+    , "flag fast\n  description: First line\n    second line\n    .\n    Last line\n  default: False\n  manual: True\n"
+    , "flag fast\n  description:\nflag slow\n  description: \"Use slow code\"\n"
+    , "description:\n  First line\n  Second line\nflag fast\n  description:\n    First line\n    Second line\n"
     ] $ \body -> do
       let result = compareBytes (header <> body)
       assert ("Expected equal structures: " ++ show result ++ "\n" ++ BSC.unpack body) (outcome result == Match)
   forM_
-    [ "flag fast\n  description: This text is lost\nlibrary\n  buildable: True\n"
-    , "build-type: Custom\ncustom-setup\n  setup-depends: base, Cabal\nlibrary\n  buildable: True\n"
+    [ "build-type: Custom\ncustom-setup\n  setup-depends: base, Cabal\nlibrary\n  buildable: True\n"
     ] $ \body -> assert "Lost data must fail equality" (outcome (compareBytes (header <> body)) == Mismatch)
   assert "Both parsers reject invalid input" (outcome (compareBytes "not a package") == BothRejected)
   assert "Count a project parse error" (outcome (compareBytes "name: old\nversion: 1\n") == ParserError)
@@ -72,3 +75,15 @@ testCompliance = do
     (fst (comparePackage removedRepository repositoryReference) == Mismatch)
   converted <- either fail pure (toCabal pkg)
   assert "Full Cabal equality" (converted == ref)
+  forM_ ["1.10", "2.0", "3.0"] $ \spec -> do
+    let flagBytes = "cabal-version: " <> spec <> "\nname: sample\nversion: 1\nbuild-type: Simple\nflag fast\n  description: First line\n    second line\n    .\n    Last line\n  default: False\n  manual: True\n"
+    flagPackage <- either (fail . show) pure (A.parseValue (A.parsePackage flagBytes))
+    flagReference <- either (fail . show) pure
+      (snd (C.runParseResult (C.parseGenericPackageDescription flagBytes)))
+    assert "Keep flag description text"
+      (A.packageFlags flagPackage == [A.Flag "fast" False True "First line\nsecond line\n.\nLast line"])
+    assert "Compare flag descriptions" (fst (comparePackage flagPackage flagReference) == Match)
+    let changedFlag = flagPackage { A.packageFlags =
+          [f { A.flagDescription = "Changed" } | f <- A.packageFlags flagPackage] }
+    assert "Use flag descriptions from the AST"
+      (fst (comparePackage changedFlag flagReference) == Mismatch)

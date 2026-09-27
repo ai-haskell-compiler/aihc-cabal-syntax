@@ -37,6 +37,7 @@ data Flag = Flag
   { flagName :: Text
   , flagDefault :: Bool
   , flagManual :: Bool
+  , flagDescription :: Text
   } deriving (Eq, Show)
 
 type FlagAssignment = Map Text Bool
