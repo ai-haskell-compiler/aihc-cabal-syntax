@@ -75,6 +75,7 @@ main = do
   testPackage
   testConsumers
   testDefaults
+  testEmptySections
   testLegacy
   testSourceRepositories
   testBuildInfo
@@ -197,6 +198,25 @@ testDefaults = do
   assert "Quoted option" ["-DNAME=hello world"] (cppOptions q)
   assert "Buildable conjunction" (Just False) (buildable q)
 
+testEmptySections :: IO ()
+testEmptySections = do
+  pkg <- parse "cabal-version: 3.0\nname: sample\nversion: 1\nflag fast\ncommon shared\nlibrary\n  import: shared\n  if flag(fast)\n  else\n    cpp-options: -DSLOW\n  ghc-options: -Wall\nexecutable tool\n"
+  assert "Empty flag defaults" [Flag "fast" True False ""] (packageFlags pkg)
+  assert "Keep empty sections and branch boundaries"
+    [ Component (Library Nothing) (Conditional
+        (emptyBuildInfo { ghcOptions = ["-Wall"] })
+        [Branch (FlagValue "fast") (Conditional emptyBuildInfo [])
+          (Just (Conditional (emptyBuildInfo { cppOptions = ["-DSLOW"] }) []))])
+    , Component (Executable "tool") (Conditional emptyBuildInfo [])
+    ] (packageComponents pkg)
+  forM_ [True, False] $ \fast -> do
+    components <- resolve (Map.singleton "fast" fast) pkg
+    info <- case components of
+      Component (Library Nothing) bi : _ -> pure bi
+      _ -> fail "Missing library"
+    assert "Select an empty branch" (if fast then [] else ["-DSLOW"]) (cppOptions info)
+    assert "Keep fields after an empty branch" ["-Wall"] (ghcOptions info)
+
 testLegacy :: IO ()
 testLegacy = do
   let input = "cabal-version: >=1.10\nname: legacy\nversion: 1\nlibrary\n  extensions: CPP\n  build-tools: happy >=1.20\n"
@@ -272,6 +292,10 @@ testErrors = do
     , ["library", "  other-modules: Sample", "  import: a"]
     , ["library", "  buildable: True", "library", "  buildable: True"]
     , ["source-repository head", "  if True", "    type: git"]
+    , ["unknown-section"]
+    , ["library", "  else"]
+    , ["library", "  if"]
+    , ["library", "  if flag(missing)"]
     ] $ \body -> reject (BSC.unlines (map BSC.pack (header ++ body)))
   reject "name: sample\nversion: 1\n"
   reject "cabal-version: 99\nname: sample\nversion: 1\n"

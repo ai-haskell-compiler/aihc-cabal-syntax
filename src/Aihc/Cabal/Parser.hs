@@ -134,7 +134,7 @@ layout bytes = do
               when (T.any (`elem` ("{};" :: String)) content)
                 (failure n "Explicit braces and semicolons are not supported")
               nested <- case children of
-                [] -> failure n "A section must contain fields"
+                [] -> Right []
                 Line _ i _ : _ -> do
                   (nestedNodes, remaining) <- block i children
                   case remaining of

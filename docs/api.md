@@ -65,6 +65,7 @@ The parser supports these features:
 - Main libraries, named libraries, executables, tests, benchmarks, and foreign libraries.
 - Flags, Boolean conditions, `os`, `arch`, `impl`, and nested `if`/`else` sections.
 - Common stanzas and imports from earlier common stanzas.
+- Empty sections, including empty conditional branches.
 - Source repository sections, with their kinds and fields stored as text.
 - Package dependencies, library targets, and modern and legacy build tools.
 - Haskell source fields, language fields, extensions, C and C++ source fields, headers, and compiler options.
