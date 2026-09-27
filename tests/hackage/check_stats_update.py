@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import subprocess
+import runpy
 import sys
 import tempfile
 import unittest
@@ -24,7 +25,7 @@ class StatsTests(unittest.TestCase):
         (self.data / "benchmark.json").write_text("old benchmark\n")
         (self.root / "README.md").write_text("old README\n")
         self.runner = self.root / "runner"
-        self.runner.write_text(f"#!{sys.executable}\nprint('3 2')\n")
+        self.runner.write_text(f"#!{sys.executable}\nimport sys\nprint('3 3' if sys.argv[1] == 'Cabal-syntax' else '3 2')\n")
         self.runner.chmod(0o755)
 
     def run_update(self, *options):
@@ -50,11 +51,29 @@ class StatsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         for name in ["results.json", "baseline.json"]:
             self.assertEqual(json.loads((self.data / name).read_text()), self.summary)
-        self.assertEqual(json.loads((self.data / "benchmark.json").read_text())["total"], 3)
+        self.assertEqual(json.loads((self.data / "benchmark.json").read_text())["parsers"]["aihc"]["total"], 3)
         self.assertIn("66.67%", (self.root / "README.md").read_text())
         self.assertEqual(self.run_update("--check").returncode, 0)
         self.change_results()
         self.assertNotEqual(self.run_update("--check").returncode, 0)
+
+    def test_ratios_and_reference_validation(self):
+        render = runpy.run_path(self.script)["render"]
+        benchmark = dict(system="test-system", ghc_version="test-version",
+                         reference_version="3.12.1.0", parsers={
+            "aihc": dict(total=3, accepted=2, elapsed_seconds=2, peak_rss_bytes=1048576),
+            "Cabal-syntax": dict(total=3, accepted=3, elapsed_seconds=4, peak_rss_bytes=4194304),
+        })
+        readme = render(self.summary, benchmark)
+        self.assertIn("| Elapsed time | 2.00 s | 4.00 s | 0.50× |", readme)
+        self.assertIn("| Peak process memory (RSS) | 1.00 MiB | 4.00 MiB | 0.25× |", readme)
+        benchmark["parsers"]["Cabal-syntax"]["accepted"] = 2
+        with self.assertRaises(ValueError):
+            render(self.summary, benchmark)
+        benchmark["parsers"]["Cabal-syntax"]["accepted"] = 3
+        benchmark["parsers"]["Cabal-syntax"]["elapsed_seconds"] = 0
+        with self.assertRaises(ValueError):
+            render(self.summary, benchmark)
 
     def test_failed_benchmark_does_not_publish(self):
         self.change_results()

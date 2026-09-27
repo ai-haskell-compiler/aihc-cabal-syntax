@@ -35,7 +35,7 @@
     '';
     benchmark = system: let
       pkgs = pkgsFor system;
-      compiler = pkgs.haskellPackages.ghcWithPackages (hp: [ (package system) hp.tar hp.bytestring ]);
+      compiler = pkgs.haskellPackages.ghcWithPackages (hp: [ (package system) hp.tar hp.bytestring hp.Cabal-syntax ]);
     in pkgs.runCommand "hackage-benchmark" { nativeBuildInputs = [ compiler ]; } ''
       ghc -O2 -Wall -Werror -odir . -hidir . ${./test/Benchmark.hs} -o "$out"
     '';

@@ -1,6 +1,7 @@
 """Generate README results from the full comparison and a separate measurement."""
 import argparse
 import json
+import math
 from pathlib import Path
 import os
 import subprocess
@@ -10,8 +11,20 @@ import time
 
 def render(summary, benchmark):
     total = summary["total"]
-    if benchmark["total"] != total or benchmark["accepted"] != summary["parser_accepted"]:
-        raise ValueError("Benchmark counts differ from the comparison")
+    ours = benchmark["parsers"]["aihc"]
+    reference = benchmark["parsers"]["Cabal-syntax"]
+    if benchmark["reference_version"] != summary["reference_version"]:
+        raise ValueError("Benchmark reference version differs from the comparison")
+    for measurement, accepted in [(ours, summary["parser_accepted"]),
+                                  (reference, summary["reference_accepted"])]:
+        if measurement["total"] != total or measurement["accepted"] != accepted:
+            raise ValueError("Benchmark counts differ from the comparison")
+        for key in ["elapsed_seconds", "peak_rss_bytes"]:
+            if not math.isfinite(measurement[key]) or measurement[key] <= 0:
+                raise ValueError("Benchmark measurements must be finite and positive")
+    def measurement_row(label, key, divisor, unit):
+        return (f"| {label} | {ours[key] / divisor:.2f} {unit} | "
+                f"{reference[key] / divisor:.2f} {unit} | {ours[key] / reference[key]:.2f}× |")
     def row(label, count):
         return f"| {label} | {count:,} | {100 * count / total:.2f}% |"
     return "\n".join([
@@ -31,14 +44,17 @@ def render(summary, benchmark):
         "The equality test compares complete `GenericPackageDescription` values after conversion of our AST.",
         "Conversion limits can also cause differences. This library is not a complete replacement for Cabal-syntax.", "",
         "## Parse benchmark", "",
-        f"One process reads all **{total:,} revisions**, parses each file, and forces each result.", "",
-        "| Measurement | Result |", "| --- | ---: |",
-        f"| Elapsed time | {benchmark['elapsed_seconds']:.2f} s |",
-        f"| Peak process memory (RSS) | {benchmark['peak_rss_bytes'] / 1048576:.2f} MiB |", "",
+        f"Each parser reads all **{total:,} revisions** in a separate process on the same machine.", "",
+        "| Measurement | aihc-cabal-syntax | Cabal-syntax | aihc / Cabal-syntax |",
+        "| --- | ---: | ---: | ---: |",
+        measurement_row("Elapsed time", "elapsed_seconds", 1, "s"),
+        measurement_row("Peak process memory (RSS)", "peak_rss_bytes", 1048576, "MiB"), "",
+        "A ratio below 1 means less time or memory than Cabal-syntax.",
         f"Measured on `{benchmark['system']}` with GHC {benchmark['ghc_version']}, `-O2`, and one RTS capability.",
         "Time includes archive input, parsing, and result evaluation through `show`.",
         "The benchmark includes rejected files. It discards each result before the next file.",
-        "This is one measurement, not a performance limit. Machine load and file caching affect the time.", "",
+        "Each parser has one measured run. Machine load and file caching affect the time.",
+        "The parsers produce different data and accept different numbers of files; these ratios include that difference.", "",
         "## Build and update", "", "```sh",
         "nix build --no-update-lock-file",
         "nix flake check --no-update-lock-file",
@@ -67,17 +83,21 @@ def main():
     if args.check:
         benchmark = json.loads(data.read_text())
     else:
-        start = time.monotonic()
-        process = subprocess.Popen([args.runner, args.index], stdout=subprocess.PIPE, text=True)
-        output = process.stdout.read()
-        _, status, usage = os.wait4(process.pid, 0)
-        process.returncode = os.waitstatus_to_exitcode(status)
-        elapsed = time.monotonic() - start
-        if process.returncode:
-            raise RuntimeError("Benchmark failed")
-        total, accepted = map(int, output.split())
-        benchmark = dict(total=total, accepted=accepted, elapsed_seconds=elapsed,
-                         peak_rss_bytes=int(usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024)),
+        measurements = {}
+        for name in ["Cabal-syntax", "aihc"]:
+            start = time.monotonic()
+            process = subprocess.Popen([args.runner, name, args.index], stdout=subprocess.PIPE, text=True)
+            output = process.stdout.read()
+            process.stdout.close()
+            _, status, usage = os.wait4(process.pid, 0)
+            process.returncode = os.waitstatus_to_exitcode(status)
+            elapsed = time.monotonic() - start
+            if process.returncode:
+                raise RuntimeError(f"Benchmark failed: {name}")
+            total, accepted = map(int, output.split())
+            measurements[name] = dict(total=total, accepted=accepted, elapsed_seconds=elapsed,
+                peak_rss_bytes=int(usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024)))
+        benchmark = dict(parsers=measurements, reference_version=summary["reference_version"],
                          system=args.system, ghc_version=args.ghc_version)
     readme = render(summary, benchmark)
     if args.check:

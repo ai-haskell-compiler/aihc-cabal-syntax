@@ -3,8 +3,10 @@ module Main (main) where
 import Aihc.Cabal (parsePackage, parseValue)
 import qualified Codec.Archive.Tar as Tar
 import Control.Exception (evaluate)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (isSuffixOf)
+import qualified Distribution.PackageDescription.Parsec as Cabal
 import System.Environment (getArgs)
 import System.IO (IOMode (ReadMode), withBinaryFile)
 
@@ -12,23 +14,32 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    [path] -> withBinaryFile path ReadMode $ \handle -> do
-      bytes <- LBS.hGetContents handle
-      (count, accepted) <- walk 0 0 (Tar.read bytes)
-      if count == 0 then fail "The index has no Cabal files"
-        else putStrLn (show count ++ " " ++ show accepted)
-    _ -> fail "Use: hackage-benchmark INDEX.tar"
+    [parser, path] | parser `elem` ["aihc", "Cabal-syntax"] ->
+      withBinaryFile path ReadMode $ \handle -> do
+        bytes <- LBS.hGetContents handle
+        (count, accepted) <- walk (parse parser) 0 0 (Tar.read bytes)
+        if count == 0 then fail "The index has no Cabal files"
+          else putStrLn (show count ++ " " ++ show accepted)
+    _ -> fail "Use: hackage-benchmark (aihc|Cabal-syntax) INDEX.tar"
 
-walk :: Int -> Int -> Tar.Entries Tar.FormatError -> IO (Int, Int)
-walk count accepted Tar.Done = pure (count, accepted)
-walk _ _ (Tar.Fail err) = fail (show err)
-walk count accepted (Tar.Next entry remaining) = case Tar.entryContent entry of
+parse :: String -> BS.ByteString -> IO Int
+parse "aihc" bytes = do
+  let result = parsePackage bytes
+  -- Force all result fields before the next file.
+  _ <- evaluate (length (show result))
+  pure (either (const 0) (const 1) (parseValue result))
+parse _ bytes = do
+  let result = Cabal.runParseResult (Cabal.parseGenericPackageDescription bytes)
+  _ <- evaluate (length (show result))
+  pure (either (const 0) (const 1) (snd result))
+
+walk :: (BS.ByteString -> IO Int) -> Int -> Int -> Tar.Entries Tar.FormatError -> IO (Int, Int)
+walk _ count accepted Tar.Done = pure (count, accepted)
+walk _ _ _ (Tar.Fail err) = fail (show err)
+walk parser count accepted (Tar.Next entry remaining) = case Tar.entryContent entry of
   Tar.NormalFile bytes _ | ".cabal" `isSuffixOf` Tar.entryPath entry -> do
-    let result = parsePackage (LBS.toStrict bytes)
-    -- Force all result fields before the next file.
-    _ <- evaluate (length (show result))
-    let success = either (const 0) (const 1) (parseValue result)
+    success <- parser (LBS.toStrict bytes)
     nextCount <- evaluate (count + 1)
     nextAccepted <- evaluate (accepted + success)
-    walk nextCount nextAccepted remaining
-  _ -> walk count accepted remaining
+    walk parser nextCount nextAccepted remaining
+  _ -> walk parser count accepted remaining

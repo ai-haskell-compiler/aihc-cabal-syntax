@@ -22,17 +22,19 @@ Conversion limits can also cause differences. This library is not a complete rep
 
 ## Parse benchmark
 
-One process reads all **200,642 revisions**, parses each file, and forces each result.
+Each parser reads all **200,642 revisions** in a separate process on the same machine.
 
-| Measurement | Result |
-| --- | ---: |
-| Elapsed time | 27.67 s |
-| Peak process memory (RSS) | 21.34 MiB |
+| Measurement | aihc-cabal-syntax | Cabal-syntax | aihc / Cabal-syntax |
+| --- | ---: | ---: | ---: |
+| Elapsed time | 26.54 s | 104.28 s | 0.25× |
+| Peak process memory (RSS) | 24.83 MiB | 38.12 MiB | 0.65× |
 
+A ratio below 1 means less time or memory than Cabal-syntax.
 Measured on `aarch64-darwin` with GHC 9.10.3, `-O2`, and one RTS capability.
 Time includes archive input, parsing, and result evaluation through `show`.
 The benchmark includes rejected files. It discards each result before the next file.
-This is one measurement, not a performance limit. Machine load and file caching affect the time.
+Each parser has one measured run. Machine load and file caching affect the time.
+The parsers produce different data and accept different numbers of files; these ratios include that difference.
 
 ## Build and update
 
