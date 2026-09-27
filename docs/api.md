@@ -23,6 +23,12 @@ For example, use `Map.singleton "ghc" version` to evaluate `impl(ghc ...)`.
 Use `parseVersion` to construct `version`.
 The library does not read the host platform or the installed compiler.
 
+For `VersionRange` equality, a `^>=` bound and its expanded intersection are different values.
+Use `withinRange` to test version membership.
+Range rendering keeps `^>=` bounds.
+Unparenthesized `&&` and `||` operators associate to the right, as in Cabal-syntax.
+Explicit parentheses keep the specified structure.
+
 `Package` contains flag declarations and conditional components.
 `flagDescription` keeps the description text, including line breaks and dot lines.
 An absent description has the value `""`.
@@ -47,6 +53,16 @@ It returns all components, including components with `buildable: False`.
 The caller selects the components to build.
 
 `BuildInfo` stores partial fields. `Nothing` means that a scalar field is absent.
+`extensions` contains the `default-extensions` values.
+`legacyExtensions` contains the older `extensions` values.
+Condition evaluation keeps both fields.
+
+The `BuildInfo` constructor has a new argument after `extensions`.
+Add `[]` at that position in constructor calls that have no older extensions.
+Set `legacyExtensions` when you create a `BuildInfo` with record syntax.
+Update constructor patterns for the new argument.
+Use both fields when you select compiler extensions.
+
 Resolution sets an absent `buildable` to `True`.
 Resolution sets an empty source directory list to `["."]`.
 An absent language stays `Nothing`. The caller can use this to detect the Haskell98 default.
@@ -61,6 +77,7 @@ The caller applies these fields to the build inputs.
 The parser supports these features:
 
 - UTF-8 input, indentation, complete-line comments, and multiline fields.
+- Trailing spaces in field text.
 - Package name, version, build type, and Cabal format version.
 - Main libraries, named libraries, executables, tests, benchmarks, and foreign libraries.
 - Flags, Boolean conditions, `os`, `arch`, `impl`, and nested `if`/`else` sections.

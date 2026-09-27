@@ -20,7 +20,7 @@ newtype Version = Version (NonEmpty Integer) deriving (Eq, Ord, Show)
 
 data VersionRange
   = AnyVersion | Equal Version | Later Version | Earlier Version
-  | AtLeast Version | AtMost Version | Both VersionRange VersionRange
+  | AtLeast Version | AtMost Version | MajorBound Version | Both VersionRange VersionRange
   | EitherRange VersionRange VersionRange
   deriving (Eq, Show)
 
@@ -71,19 +71,20 @@ withinRange v range = case range of
   Earlier w -> v < w
   AtLeast w -> v >= w
   AtMost w -> v <= w
+  MajorBound w -> v >= w && v < majorUpperBound w
   Both a b -> withinRange v a && withinRange v b
   EitherRange a b -> withinRange v a || withinRange v b
 
 rangeParser :: Parser VersionRange
 rangeParser = makeExprParser atom
-  [ [InfixL (Both <$ symbol "&&")]
-  , [InfixL (EitherRange <$ symbol "||")]
+  [ [InfixR (Both <$ symbol "&&")]
+  , [InfixR (EitherRange <$ symbol "||")]
   ]
   where
     atom = between (symbol "(") (symbol ")") rangeParser
       <|> AnyVersion <$ symbol "-any"
       <|> Earlier (Version (0 :| [])) <$ symbol "-none"
-      <|> (symbol "^>=" *> versions major)
+      <|> (symbol "^>=" *> versions MajorBound)
       <|> try wildcard
       <|> (symbol "==" *> versions Equal)
       <|> (symbol ">=" *> (AtLeast <$> L.lexeme space versionParser))
@@ -101,11 +102,11 @@ rangeParser = makeExprParser atom
       let lower = Version (NE.fromList ns)
           upper = Version (NE.fromList (init ns ++ [last ns + 1]))
       pure (Both (AtLeast lower) (Earlier upper))
-    major v@(Version ns) = Both (AtLeast v) (Earlier (Version upper))
-      where upper = case NE.toList ns of
-              [x] -> x :| [1]
-              x:y:_ -> x :| [y + 1]
-              [] -> 1 :| []
+
+majorUpperBound :: Version -> Version
+majorUpperBound (Version ns) = Version $ case ns of
+  x :| [] -> x :| [1]
+  x :| (y:_) -> x :| [y + 1]
 
 parseVersionRange :: Text -> Either Text VersionRange
 parseVersionRange = parseWith rangeParser
@@ -118,5 +119,6 @@ renderVersionRange r = case r of
   Earlier v -> "< " <> renderVersion v
   AtLeast v -> ">= " <> renderVersion v
   AtMost v -> "<= " <> renderVersion v
+  MajorBound v -> "^>= " <> renderVersion v
   Both a b -> "(" <> renderVersionRange a <> " && " <> renderVersionRange b <> ")"
   EitherRange a b -> "(" <> renderVersionRange a <> " || " <> renderVersionRange b <> ")"

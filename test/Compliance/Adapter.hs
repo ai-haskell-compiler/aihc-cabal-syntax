@@ -99,6 +99,7 @@ convertBuildInfo raw bi = do
   autogen <- traverse atom (A.autogenModules bi)
   language <- traverse atom (A.defaultLanguage bi)
   extensions <- traverse atom (A.extensions bi)
+  legacyExtensions <- traverse atom (A.legacyExtensions bi)
   dependencies <- traverse convertDependency (A.dependencies bi)
   modern <- traverse modernTool [t | t <- A.buildTools bi, Just _ <- [A.toolPackage t]]
   legacy <- traverse legacyTool [t | t <- A.buildTools bi, Nothing <- [A.toolPackage t]]
@@ -110,6 +111,7 @@ convertBuildInfo raw bi = do
     , C.autogenModules = autogen
     , C.defaultLanguage = language
     , C.defaultExtensions = extensions
+    , C.oldExtensions = legacyExtensions
     , C.targetBuildDepends = dependencies
     , C.buildTools = legacy
     , C.buildToolDepends = modern
