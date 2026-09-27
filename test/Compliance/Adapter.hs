@@ -34,6 +34,7 @@ toCabal pkg = do
         $ Map.adjust (const [A.buildType pkg]) "build-type" (A.packageFields pkg)
   pd <- fields spec C.packageDescriptionFieldGrammar retained
   repositories <- traverse (sourceRepository spec) (A.packageSourceRepositories pkg)
+  flags <- traverse (flag spec) (A.packageFlags pkg)
   version <- convertVersion (A.packageVersion pkg)
   buildType <- if Map.member "build-type" (A.packageFields pkg)
     then Just <$> atom (A.buildType pkg) else Right Nothing
@@ -43,11 +44,15 @@ toCabal pkg = do
         , C.buildTypeRaw = buildType
         , C.sourceRepos = repositories
         }
-      flags = [C.MkPackageFlag (C.mkFlagName (T.unpack (A.flagName f))) ""
-                (A.flagDefault f) (A.flagManual f) | f <- A.packageFlags pkg]
       initial = C.emptyGenericPackageDescription
         { C.packageDescription = description, C.genPackageFlags = flags }
   foldM (component spec) initial (A.packageComponents pkg)
+
+flag :: C.CabalSpecVersion -> A.Flag -> Either String C.PackageFlag
+flag spec f = do
+  raw <- fields spec (C.flagFieldGrammar (C.mkFlagName (T.unpack (A.flagName f))))
+    (Map.singleton "description" [A.flagDescription f])
+  pure raw { C.flagDefault = A.flagDefault f, C.flagManual = A.flagManual f }
 
 sourceRepository :: C.CabalSpecVersion -> A.SourceRepository -> Either String C.SourceRepo
 sourceRepository spec repository = do
@@ -61,7 +66,8 @@ fields spec grammar retained = either (Left . show) Right
     -- Keep each occurrence and each retained line separately.
     fieldMap = Map.fromList . map (\(k, vs) -> (TE.encodeUtf8 k, map value vs)) . Map.toList
     value text = C.MkNamelessField C.zeroPos
-      [C.FieldLine C.zeroPos (TE.encodeUtf8 line) | line <- if T.null text then [] else T.splitOn "\n" text]
+      [C.FieldLine (C.Position row 1) (TE.encodeUtf8 line)
+      | (row, line) <- zip [1..] (dropWhile T.null (T.splitOn "\n" text))]
 
 atom :: C.Parsec a => Text -> Either String a
 atom text = maybe (Left ("Cannot convert field value: " ++ T.unpack text)) Right (C.simpleParsec (T.unpack text))

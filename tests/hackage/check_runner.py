@@ -36,7 +36,7 @@ class RunnerTests(unittest.TestCase):
         self.archive([
             ("sample/1.0/sample.cabal", header + b"unknown-field: warning\n"),
             ("sample/1.0/package.json", b"{}"),
-            ("sample/1.0/sample.cabal", header + b"flag fast\n  description: Lost text\n"),
+            ("sample/1.0/sample.cabal", header + b"build-type: Custom\ncustom-setup\n  setup-depends: base, Cabal\n"),
             ("old/1/old.cabal", b"name: old\nversion: 1\n"),
         ])
         result = self.run_report()

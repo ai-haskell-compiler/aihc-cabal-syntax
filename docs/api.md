@@ -24,6 +24,13 @@ Use `parseVersion` to construct `version`.
 The library does not read the host platform or the installed compiler.
 
 `Package` contains flag declarations and conditional components.
+`flagDescription` keeps the description text, including line breaks and dot lines.
+An absent description has the value `""`.
+The `Flag` constructor has a new final argument for the description.
+Add `""` to constructor calls that have no description.
+Set `flagDescription` when you create a `Flag` with record syntax.
+Update constructor patterns for the new argument.
+
 `packageSourceRepositories` contains source repository sections in source order.
 Each `SourceRepository` contains a kind and a map of field names to text values.
 Repeated fields keep their values in source order. The parser keeps unknown fields.

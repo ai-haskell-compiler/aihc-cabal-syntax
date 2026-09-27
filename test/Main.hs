@@ -114,7 +114,7 @@ testPackage = do
   ref <- right (snd (C.runParseResult (C.parseGenericPackageDescription fixture)))
   assert "Package name" "sample" (packageName pkg)
   assert "Component count" 6 (length (packageComponents pkg))
-  assert "Flag declarations" [Flag "fast" True False] (packageFlags pkg)
+  assert "Flag declarations" [Flag "fast" True False ""] (packageFlags pkg)
   forM_ [True, False] $ \fast -> do
     cs <- resolve (Map.singleton "fast" fast) pkg
     bi <- case cs of Component (Library Nothing) b:_ -> pure b; _ -> fail "Missing library"

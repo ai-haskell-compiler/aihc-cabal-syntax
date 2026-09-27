@@ -245,7 +245,8 @@ readFlag n key body = do
   ensureUnique [(i,k) | (i,k,_) <- fields]
   def <- maybe (Right True) (value n bool) (lookupField "default" fields)
   manual <- maybe (Right False) (value n bool) (lookupField "manual" fields)
-  pure (Flag key' def manual)
+  let description = fromMaybe "" (lookupField "description" fields)
+  pure (Flag key' def manual description)
 
 buildTree :: Version -> Map.Map Text (Conditional BuildInfo) -> [Node] -> Result (Conditional BuildInfo)
 buildTree spec commons = go False (Conditional emptyBuildInfo [])
