@@ -78,6 +78,7 @@ data BuildInfo = BuildInfo
   , mainIs :: Maybe FilePath
   , defaultLanguage :: Maybe Text
   , extensions :: [Text]
+  , legacyExtensions :: [Text]
   , dependencies :: [Dependency]
   , buildTools :: [ToolDependency]
   , cSources :: [FilePath]
@@ -93,7 +94,7 @@ data BuildInfo = BuildInfo
   } deriving (Eq, Show)
 
 emptyBuildInfo :: BuildInfo
-emptyBuildInfo = BuildInfo Nothing [] [] [] [] Nothing Nothing [] [] [] [] [] [] [] [] [] [] [] [] Map.empty
+emptyBuildInfo = BuildInfo Nothing [] [] [] [] Nothing Nothing [] [] [] [] [] [] [] [] [] [] [] [] [] Map.empty
 
 -- | Merge explicit fields. Apply defaults after all active branches are merged.
 mergeBuildInfo :: BuildInfo -> BuildInfo -> BuildInfo
@@ -109,6 +110,7 @@ mergeBuildInfo a b = BuildInfo
   , mainIs = prefer (mainIs a) (mainIs b)
   , defaultLanguage = prefer (defaultLanguage a) (defaultLanguage b)
   , extensions = nub (extensions a ++ extensions b)
+  , legacyExtensions = nub (legacyExtensions a ++ legacyExtensions b)
   , dependencies = nub (dependencies a ++ dependencies b)
   , buildTools = buildTools a ++ buildTools b
   , cSources = nub (cSources a ++ cSources b)

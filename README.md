@@ -14,7 +14,7 @@ The reference parser is **Cabal-syntax 3.12.1.0**.
 | --- | ---: | ---: |
 | aihc-cabal-syntax accepts | 185,992 | 92.70% |
 | Cabal-syntax accepts | 200,615 | 99.99% |
-| Equal converted data | 149,540 | 74.53% |
+| Equal converted data | 173,724 | 86.58% |
 
 An accepted file does not prove full compliance.
 The equality test compares complete `GenericPackageDescription` values after conversion of our AST.
@@ -26,8 +26,8 @@ Each parser reads all **200,642 revisions** in a separate process on the same ma
 
 | Measurement | aihc-cabal-syntax | Cabal-syntax | aihc / Cabal-syntax |
 | --- | ---: | ---: | ---: |
-| Elapsed time | 40.70 s | 119.51 s | 0.34× |
-| Peak process memory (RSS) | 25.88 MiB | 38.20 MiB | 0.68× |
+| Elapsed time | 45.99 s | 134.27 s | 0.34× |
+| Peak process memory (RSS) | 25.86 MiB | 38.22 MiB | 0.68× |
 
 A ratio below 1 means less time or memory than Cabal-syntax.
 Measured on `aarch64-darwin` with GHC 9.10.3, `-O2`, and one RTS capability.

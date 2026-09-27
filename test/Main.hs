@@ -94,13 +94,13 @@ testVersions :: IO ()
 testVersions = do
   forM_ ["0", "0.0", "1", "1.2", "1.2.0", "1.2.3", "1.3", "2", "2.0", "4.18", "9.12.2"] $ \v ->
     assert "Version round trip" (Right (version v)) (parseVersion (renderVersion (version v)))
-  forM_ ["-any", "-none", "==1.2", "==1.2.*", ">=1.2 && <2", "^>=1.2.3", "^>=1", "=={1.2,2.3}", "^>={1.2,2.3}", "<=1.2 || >2", "(>=1 && <2) || ==3"] $ \input -> do
+  forM_ ["-any", "-none", "==1.2", "==1.2.*", ">=1.2 && <2", "^>=1.2.3", "^>=1", "^>=0.0.3", ">=1 && <3 && >1.2", "==1 || ==2 || ==3", "=={1.2,2.3}", "^>={1.2,2.3}", "<=1.2 || >2", "(>=1 && <2) || ==3"] $ \input -> do
     range <- right (parseVersionRange input)
     ref <- case input of
       "-any" -> pure C.anyVersion
       "-none" -> pure C.noVersion
       _ -> maybe (fail ("Reference range parse failed: " ++ T.unpack input)) pure (C.simpleParsec (T.unpack input) :: Maybe C.VersionRange)
-    forM_ [[0], [1], [1,0], [1,2], [1,2,0], [1,2,3], [1,2,4], [1,3], [2], [2,0], [3], [4,18]] $ \ns -> do
+    forM_ [[0], [0,0,3], [0,1], [1], [1,0], [1,1], [1,2], [1,2,0], [1,2,3], [1,2,4], [1,3], [2], [2,0], [3], [4,18]] $ \ns -> do
       v <- maybe (fail "Invalid test version") pure (mkVersion (NE.fromList (map toInteger ns)))
       assert ("Range membership: " ++ T.unpack input ++ " " ++ show ns)
         (C.withinRange (C.mkVersion ns) ref) (withinRange v range)
@@ -237,7 +237,13 @@ testLegacy = do
   pkg <- parse input
   _ <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
   [Component _ bi] <- resolve Map.empty pkg
-  assert "Legacy extensions" ["CPP"] (extensions bi)
+  assert "Legacy extensions" ["CPP"] (legacyExtensions bi)
+  assert "Default extension field" [] (extensions bi)
+  let extensionInput = "cabal-version: 2.2\nname: sample\nversion: 1\ncommon shared\n  extensions: CPP\n  default-extensions: OverloadedStrings\nlibrary\n  import: shared\n  if os(linux)\n    extensions: ForeignFunctionInterface\n    default-extensions: BangPatterns\n"
+  extensionPackage <- parse extensionInput
+  [Component _ extensionInfo] <- resolve Map.empty extensionPackage
+  assert "Merge older extensions" ["CPP", "ForeignFunctionInterface"] (legacyExtensions extensionInfo)
+  assert "Merge default extensions" ["OverloadedStrings", "BangPatterns"] (extensions extensionInfo)
   assert "Legacy tool name" ["happy"] (map toolName (buildTools bi))
   assert "Legacy tool package" [Nothing] (map toolPackage (buildTools bi))
   let setInput = BSC.unlines (map BSC.pack (header ++

@@ -77,7 +77,7 @@ conditionParser = makeExprParser atom
       <|> call "os" (OS . T.toLower <$> name)
       <|> call "arch" (Arch . T.toLower <$> name)
       <|> call "flag" (FlagValue . T.toLower <$> name)
-      <|> call "impl" (Impl . T.toLower <$> name <*> (fromMaybe anyVersion <$> optional rangeParser))
+      <|> call "impl" (Impl . T.toLower <$> name <*> (fromMaybe anyVersion <$> optional conditionRangeParser))
     call key p = symbol key *> between (symbol "(") (symbol ")") p
 
 dependencyParser :: Parser Dependency
@@ -114,8 +114,8 @@ layout bytes = do
   where
     prepare (n, raw) =
       let prefix = T.takeWhile (\c -> c == ' ' || c == '\t') raw
-          content = T.stripEnd (T.drop (T.length prefix) raw)
-      in if T.null content || "--" `T.isPrefixOf` content then Right []
+          content = T.dropWhileEnd (== '\r') (T.drop (T.length prefix) raw)
+      in if T.null (T.strip content) || "--" `T.isPrefixOf` content then Right []
          else if T.any (== '\t') prefix then failure n "Tabs in indentation are not supported"
          else Right [Line n (T.length prefix) content]
     block _ [] = Right ([], [])
@@ -129,7 +129,7 @@ layout bytes = do
                 && T.all (\c -> isAlphaNum c || c == '-' || c == '_') key
           node <- if isField
             then Right (Field n (T.toLower key)
-              (T.intercalate "\n" (T.strip (T.drop 1 suffix) : [t | Line _ _ t <- children])))
+              (T.intercalate "\n" (T.stripStart (T.drop 1 suffix) : [t | Line _ _ t <- children])))
             else do
               when (T.any (`elem` ("{};" :: String)) content)
                 (failure n "Explicit braces and semicolons are not supported")
@@ -140,7 +140,7 @@ layout bytes = do
                   case remaining of
                     Line m _ _ : _ -> failure m "Invalid indentation"
                     [] -> Right nestedNodes
-              Right (Section n content nested)
+              Right (Section n (T.stripEnd content) nested)
           (nodes, remaining) <- block indent after
           Right (node : nodes, remaining)
 
@@ -314,7 +314,7 @@ buildField spec n key input
       "other-modules" -> modules (\x -> e {otherModules = x})
       "autogen-modules" -> modules (\x -> e {autogenModules = x})
       "default-extensions" -> list (\x -> e {extensions = x})
-      "extensions" -> removed "3.0" *> list (\x -> e {extensions = x})
+      "extensions" -> removed "3.0" *> list (\x -> e {legacyExtensions = x})
       "build-depends" -> do
         rangeGates
         ds <- value n (optional (symbol ",") *> dependencyParser `sepEndBy` symbol ",") input

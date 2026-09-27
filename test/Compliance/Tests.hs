@@ -25,7 +25,9 @@ testCompliance = do
       assert ("Compare older format " ++ BSC.unpack (prefix <> spec))
         (outcome (compareBytes bytes) == Match)
   forM_
-    [ "library\n  exposed-modules: Sample\n  build-depends: base >=4 && <5\n"
+    [ "synopsis: Sample text  \nauthor: A. Person \nhomepage: https://example.com/ \ndescription: First line  \n  Second line \nlibrary  \n  exposed-modules: Sample\n"
+    , "library\n  exposed-modules: Sample\n  build-depends: base >=4 && <5\n"
+    , "synopsis: Sample text \r\n  \r\nlibrary \r\n  -- A comment\r\n  exposed-modules: Sample \r\n"
     , "library\n"
     , "library\n  -- No fields\n"
     , "flag fast\nlibrary\n  if flag(fast)\n  else\n    cpp-options: -DSLOW\n"
@@ -54,6 +56,41 @@ testCompliance = do
     ] $ \body -> do
       let result = compareBytes (header <> body)
       assert ("Expected equal structures: " ++ show result ++ "\n" ++ BSC.unpack body) (outcome result == Match)
+  forM_ ["1.10", "2.0"] $ \spec ->
+    forM_
+      [ "  extensions: CPP, ForeignFunctionInterface\n"
+      , "  extensions: CPP\n  default-extensions: OverloadedStrings\n"
+      , "  default-extensions: CPP\n  extensions: CPP\n"
+      , "  extensions: CPP\n  if os(linux)\n    extensions: ForeignFunctionInterface\n"
+      ] $ \body -> do
+        let bytes = "cabal-version: " <> spec <> "\nname: sample\nversion: 1\nbuild-type: Simple\nlibrary\n" <> body
+        assert ("Keep extension field values: " ++ show (compareBytes bytes) ++ BSC.unpack bytes)
+          (outcome (compareBytes bytes) == Match)
+  forM_
+    [ "^>=1", "^>=1.2.3", "^>={1.2,2.3,3.4}"
+    , ">=1 && <2 && >1.1", "==1 || ==2 || ==3"
+    , "(==1 || ==2) || ==3", "^>=1.2 && (<1.3 || ==2)"
+    ] $ \range -> do
+      let bytes = header <> "library\n  build-depends: base " <> range <> "\n"
+      assert ("Keep version range structure: " ++ BSC.unpack range)
+        (outcome (compareBytes bytes) == Match)
+  let extensionBytes = "cabal-version: 2.2\nname: sample\nversion: 1\nbuild-type: Simple\ncommon shared\n  extensions: CPP\nlibrary\n  import: shared\n  default-extensions: OverloadedStrings\n"
+  extensionPackage <- either (fail . show) pure (A.parseValue (A.parsePackage extensionBytes))
+  extensionReference <- either (fail . show) pure
+    (snd (C.runParseResult (C.parseGenericPackageDescription extensionBytes)))
+  assert "Convert imported older extensions"
+    (fst (comparePackage extensionPackage extensionReference) == Match)
+  let changedExtensions = extensionPackage { A.packageComponents =
+        [component { A.componentData = tree { A.unconditional =
+            (A.unconditional tree) { A.legacyExtensions = ["BangPatterns"] } } }
+        | component <- A.packageComponents extensionPackage, let tree = A.componentData component] }
+  assert "Use older extensions from the AST"
+    (fst (comparePackage changedExtensions extensionReference) == Mismatch)
+  forM_ ["==1 || ==2 || ==3", ">=1 && <3 && >1.1", "(==1 || ==2) || ==3"] $ \range -> do
+    let bytes = header <> "library\n  if impl(ghc " <> range <> ")\n    buildable: False\n"
+    assert "Keep compiler range structure" (outcome (compareBytes bytes) == Match)
+  let toolBytes = header <> "library\n  build-tool-depends: alex:alex ^>=3.2.4\n  if impl(ghc ^>=9.2)\n    buildable: False\n"
+  assert "Keep tool and compiler major bounds" (outcome (compareBytes toolBytes) == Match)
   forM_
     [ "build-type: Custom\ncustom-setup\n  setup-depends: base, Cabal\nlibrary\n  buildable: True\n"
     ] $ \body -> assert "Lost data must fail equality" (outcome (compareBytes (header <> body)) == Mismatch)
