@@ -131,3 +131,44 @@ Run the required checks:
 nix build --no-update-lock-file
 nix flake check --no-update-lock-file
 ```
+
+## README measurements
+
+Run `nix run .#update-readme --no-update-lock-file` from the repository root.
+The command uses the full comparison report and measures each parser in a separate process.
+It writes `tests/hackage/benchmark.json` and generates `README.md` from both results.
+The Nix check requires the README to agree with the comparison and the saved measurement.
+CI does not compare elapsed time with a fixed limit.
+
+The benchmark reads the archive in order, including all revisions and rejected files.
+It forces each complete parse result through `length (show result)` before the next file.
+Thus, elapsed time includes input, parsing, result evaluation, and conversion to text.
+It excludes compilation and the comparison converter.
+Both parsers use the same archive reader, compiler, optimization, and result evaluation method.
+Cabal-syntax runs first. The aihc parser runs second. Each parser has one measured run.
+The README shows absolute measurements and the aihc-to-Cabal-syntax ratios.
+A ratio below 1 means that aihc uses less time or memory.
+The parsers have different output types and accept different numbers of files.
+These ratios measure the complete archive workload, including those differences.
+The measurement uses a monotonic clock and the child process peak resident set size (RSS).
+RSS includes the runtime and archive buffers. It is not the Haskell heap size.
+The saved data records both measurements, their file counts, the Cabal-syntax version, the Nix system, and the GHC version.
+Run the update command on the same machine for performance comparisons.
+
+## Weekly results
+
+The `Update Hackage results` workflow runs each Monday at 05:17 UTC.
+You can also start it with `workflow_dispatch`.
+It compares the full report with `tests/hackage/results.json`.
+If the results are unchanged, it keeps the saved benchmark and opens no new pull request.
+A change in benchmark time alone does not cause a pull request.
+
+If the results change, the workflow measures a new benchmark and updates the README and baseline.
+It runs both required Nix checks before it opens or updates `codex/weekly-hackage-results`.
+Review the changed counts before merge. The workflow does not merge the pull request.
+It does not change the Hackage index or dependency pins.
+
+The schedule starts after the workflow file is on `main`.
+The repository must permit GitHub Actions to create pull requests.
+The workflow uses `GITHUB_TOKEN`. Its pull request does not start another CI run.
+The weekly workflow runs the checks before it creates the pull request.

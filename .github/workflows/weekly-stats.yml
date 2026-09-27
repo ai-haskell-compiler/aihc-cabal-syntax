@@ -1,0 +1,46 @@
+name: Update Hackage results
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: weekly-hackage-results
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.28.5/install
+      - name: Update changed results
+        run: nix run .#update-readme --no-update-lock-file -- --refresh-stats
+      - run: nix build --no-update-lock-file
+      - run: nix flake check --no-update-lock-file
+      - uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676
+        with:
+          branch: codex/weekly-hackage-results
+          base: main
+          commit-message: 'docs: update Hackage results'
+          title: 'docs: update Hackage results'
+          body: |
+            Update the saved Hackage results, README, baseline, and benchmark.
+            Review the changed counts before merge.
+
+            Checks passed:
+            - `nix build --no-update-lock-file`
+            - `nix flake check --no-update-lock-file`
+
+            The Hackage index and dependency pins are unchanged.
+          add-paths: |
+            README.md
+            tests/hackage/results.json
+            tests/hackage/baseline.json
+            tests/hackage/benchmark.json

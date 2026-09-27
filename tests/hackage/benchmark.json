@@ -1,0 +1,19 @@
+{
+  "parsers": {
+    "Cabal-syntax": {
+      "total": 200642,
+      "accepted": 200615,
+      "elapsed_seconds": 104.27877716708463,
+      "peak_rss_bytes": 39976960
+    },
+    "aihc": {
+      "total": 200642,
+      "accepted": 118780,
+      "elapsed_seconds": 26.537212416995317,
+      "peak_rss_bytes": 26034176
+    }
+  },
+  "reference_version": "3.12.1.0",
+  "system": "aarch64-darwin",
+  "ghc_version": "9.10.3"
+}
