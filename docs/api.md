@@ -63,7 +63,8 @@ The parser supports these features:
 - UTF-8 input, indentation, complete-line comments, and multiline fields.
 - Package name, version, build type, and Cabal format version.
 - Main libraries, named libraries, executables, tests, benchmarks, and foreign libraries.
-- Flags, Boolean conditions, `os`, `arch`, `impl`, and nested `if`/`else` sections.
+- Flags, Boolean conditions, `os`, `arch`, `impl`, and nested `if`/`elif`/`else` sections.
+- Section keywords in upper case or lower case, such as `If` and `if(flag(x))`.
 - Common stanzas and imports from earlier common stanzas.
 - Empty sections, including empty conditional branches.
 - Source repository sections, with their kinds and fields stored as text.
@@ -80,14 +81,17 @@ This range is an input limit, not a claim of complete format conformance.
 The MVP has these limits:
 
 - Build fields outside component sections stay in `packageFields`. The parser does not convert these fields into components.
-- Explicit layout braces, semicolon layout, and `elif` sections are not supported.
-- Signatures, mixins, and module reexports produce errors, including in inactive branches.
+- Explicit layout braces and semicolon layout are not supported.
+- Signatures, mixins, and module reexports stay in `extraFields` as text.
 - Package fields not used by this API stay in `packageFields` as text.
 - Component fields not used by this API stay in `extraFields` as text.
 - The parser does not interpret or keep `custom-setup` section contents.
 - The parser does not validate source repository fields. Nested sections produce errors.
 - The parser does not perform all Cabal package validation or all format-version checks.
-- Duplicate package fields produce errors. Cabal can accept some such inputs with warnings.
+- Repeated `name`, `version`, and `cabal-version` fields produce errors.
+  Other repeated package fields keep all values in source order.
+- Before `cabal-version` 2.2, the parser ignores `elif` sections, as Cabal does.
+- Before `cabal-version` 2.0, the parser accepts `build-tool-depends`, as Cabal does.
 - Syntax diagnostics identify the field or section line. Package checks can report line 1.
   Diagnostics do not identify an exact value column.
 - The MVP stops at the first error. `parseWarnings` is reserved and is currently empty.
@@ -95,7 +99,8 @@ The MVP has these limits:
 - No package-file printer or version-range simplifier is provided.
 
 Library targets remain separate from package names.
-A dependency on a declared internal library name is converted to a dependency on the current package.
+Before `cabal-version` 3.4, a dependency on a declared internal library name is converted to a dependency on the current package.
+From `cabal-version` 3.4, a dependency name always identifies a package, as in Cabal.
 The parser retains the internal library target.
 The solver can inspect `Conditional` values before it selects flags.
 

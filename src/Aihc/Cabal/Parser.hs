@@ -14,7 +14,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Void (Void)
-import Text.Megaparsec (Parsec, between, eof, errorBundlePretty, many, manyTill, runParser, satisfy, sepBy1, sepEndBy, some)
+import Text.Megaparsec (Parsec, between, eof, errorBundlePretty, many, manyTill, runParser, satisfy, sepBy1, sepEndBy, sepEndBy1, some)
 import Text.Megaparsec.Char (char, space1, string')
 import qualified Text.Megaparsec.Char.Lexer as L
 import Aihc.Cabal.Types
@@ -152,7 +152,8 @@ parsePackage bytes = report $ do
   nodes <- layout bytes
   let fields = [(n, k, v) | Field n k v <- nodes]
       sections = [(n, k, v) | Section n k v <- nodes]
-  ensureUnique [(n, k) | (n,k,_) <- fields]
+  -- Cabal accepts most repeated package fields with a warning.
+  ensureUnique [(n, k) | (n,k,_) <- fields, k `elem` ["name", "version", "cabal-version"]]
   (nameLine, pkgText) <- required "name" fields
   pkg <- value nameLine packageNameParser pkgText
   (versionLine, versionText) <- required "version" fields
@@ -166,7 +167,7 @@ parsePackage bytes = report $ do
   upper <- versionAt "3.14"
   unless (spec >= lower && spec <= upper)
     (failure specLine "Supported Cabal format versions are 1.0 through 3.14")
-  let topFields = Map.fromList [(k,[v]) | (_,k,v) <- fields]
+  let topFields = Map.fromListWith (flip (++)) [(k,[v]) | (_,k,v) <- fields]
       hasSetup = any (\(_,k,_) -> T.toLower k == "custom-setup") sections
       bt = fromMaybe (if hasSetup then "Custom" else "Simple") (lookupField "build-type" fields)
   unless (bt `elem` ["Simple", "Configure", "Custom", "Make", "Hooks"])
@@ -176,7 +177,9 @@ parsePackage bytes = report $ do
   ensureUnique [(1, T.pack (show (componentKind c))) | c <- components]
   let knownFlags = map flagName flags
   mapM_ (checkFlags knownFlags . componentData) components
-  let libraries = [x | Component (Library (Just x)) _ <- components]
+  noShadowing <- versionAt "3.4"
+  -- From cabal-version 3.4, a dependency name always identifies a package.
+  let libraries = [x | spec < noShadowing, Component (Library (Just x)) _ <- components]
       normalized = map (normalizeComponent pkg libraries) components
   pure (Package pkg version spec bt flags normalized topFields repositories)
   where
@@ -255,34 +258,54 @@ buildTree spec commons = go False (Conditional emptyBuildInfo [])
     go seen tree (Field n "import" input : rest) = do
       when seen (failure n "Put imports before other fields and conditions")
       gate n spec "2.2" "import"
-      keys <- value n (name `sepBy1` symbol ",") input
+      keys <- value n (optional (symbol ",") *> name `sepEndBy1` symbol ",") input
       imported <- mapM (\key -> maybe (failure n ("Unknown common stanza: " <> key)) Right (Map.lookup key commons)) keys
       go False (foldl mergeTree tree imported) rest
     go _ tree (Field n key input : rest) = do
       info <- buildField spec n key input
       go True (tree {unconditional = mergeBuildInfo (unconditional tree) info}) rest
     go _ tree (Section n header body : rest)
-      | Just expr <- T.stripPrefix "if " header = do
-          cond <- value n conditionParser expr
-          checkImportVersion n body
-          yes <- buildTree spec commons body
-          (no, after) <- case rest of
-            Section m "else" other : remaining -> do
-              checkImportVersion m other
-              t <- buildTree spec commons other
-              pure (Just t, remaining)
-            _ -> pure (Nothing, rest)
-          go True (tree {branches = branches tree ++ [Branch cond yes no]}) after
+      | Just expr <- conditional "if" header = do
+          (branch, after) <- ifChain n expr body rest
+          go True (tree {branches = branches tree ++ [branch]}) after
       | otherwise = failure n ("Unsupported conditional section: " <> header)
+    -- Cabal ignores an elif section before cabal-version 2.2. It gives a warning.
+    ifChain n expr body rest = do
+      cond <- value n conditionParser expr
+      checkImportVersion n body
+      yes <- buildTree spec commons body
+      (no, after) <- elseChain rest
+      pure (Branch cond yes no, after)
+    elseChain (Section m header other : remaining)
+      | Just "" <- conditional "else" header = do
+          checkImportVersion m other
+          t <- buildTree spec commons other
+          pure (Just t, remaining)
+      | Just expr <- conditional "elif" header, spec >= elifVersion = do
+          (branch, after) <- ifChain m expr other remaining
+          pure (Just (Conditional emptyBuildInfo [branch]), after)
+      | Just _ <- conditional "elif" header = elseChain remaining
+    elseChain rest = pure (Nothing, rest)
+    elifVersion = either (error . T.unpack) id (parseVersion "2.2")
     checkImportVersion n body = when (any isImport body) (gate n spec "3.0" "conditional import")
     isImport (Field _ "import" _) = True
     isImport _ = False
     mergeTree (Conditional a bs) (Conditional b cs) = Conditional (mergeBuildInfo a b) (bs ++ cs)
 
+-- | Get the argument of a conditional section header. The keyword is not
+-- case-sensitive. A parenthesis can follow the keyword directly.
+conditional :: Text -> Text -> Maybe Text
+conditional keyword header
+  | T.toLower word /= keyword = Nothing
+  | T.null rest = Just ""
+  | isSpace (T.head rest) || T.head rest == '(' = Just (T.strip rest)
+  | otherwise = Nothing
+  where
+    (word, rest) = T.span isLetter header
+
 buildField :: Version -> Int -> Text -> Text -> Result BuildInfo
 buildField spec n key input
-  | key `elem` ["signatures", "mixins", "reexported-modules"] = failure n ("Unsupported field: " <> key)
-  | otherwise = case key of
+  = case key of
       "buildable" -> (\x -> e {buildable = Just x}) <$> value n bool input
       "main-is" -> (\x -> e {mainIs = Just (T.unpack x)}) <$> value n token input
       "default-language" -> (\x -> e {defaultLanguage = Just x}) <$> value n name input
@@ -297,9 +320,9 @@ buildField spec n key input
         ds <- value n (optional (symbol ",") *> dependencyParser `sepEndBy` symbol ",") input
         when (any (any isNamed . dependencyLibraries) ds) (gate n spec "3.0" "library dependency targets")
         pure e {dependencies = ds}
+      -- Before cabal-version 2.0, Cabal gives a warning for this field and keeps it.
       "build-tool-depends" -> do
         rangeGates
-        gate n spec "2.0" "build-tool-depends"
         ds <- value n (optional (symbol ",") *> toolParser True `sepEndBy` symbol ",") input
         pure e {buildTools = ds}
       "build-tools" -> do
