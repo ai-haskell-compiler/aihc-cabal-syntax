@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Aihc.Cabal.Version
   ( Version, versionNumbers, mkVersion, parseVersion, renderVersion
-  , VersionRange, anyVersion, thisVersion, withinRange, intersectRanges
-  , unionRanges, parseVersionRange, renderVersionRange, versionParser, rangeParser
+  , VersionRange (..), anyVersion, thisVersion, withinRange, intersectRanges
+  , unionRanges, parseVersionRange, renderVersionRange, versionParser, rangeParser, conditionRangeParser
   ) where
 
 import Control.Applicative (empty, (<|>))
@@ -76,12 +76,19 @@ withinRange v range = case range of
   EitherRange a b -> withinRange v a || withinRange v b
 
 rangeParser :: Parser VersionRange
-rangeParser = makeExprParser atom
-  [ [InfixR (Both <$ symbol "&&")]
-  , [InfixR (EitherRange <$ symbol "||")]
+rangeParser = rangeParserWith False
+
+conditionRangeParser :: Parser VersionRange
+conditionRangeParser = rangeParserWith True
+
+rangeParserWith :: Bool -> Parser VersionRange
+rangeParserWith leftAssociative = makeExprParser atom
+  [ [operator (Both <$ symbol "&&")]
+  , [operator (EitherRange <$ symbol "||")]
   ]
   where
-    atom = between (symbol "(") (symbol ")") rangeParser
+    operator = if leftAssociative then InfixL else InfixR
+    atom = between (symbol "(") (symbol ")") (rangeParserWith leftAssociative)
       <|> AnyVersion <$ symbol "-any"
       <|> Earlier (Version (0 :| [])) <$ symbol "-none"
       <|> (symbol "^>=" *> versions MajorBound)

@@ -9,7 +9,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import Aihc.Cabal.Types
-import Aihc.Cabal.Version hiding (versionParser, rangeParser)
+import Aihc.Cabal.Version hiding (versionParser, rangeParser, conditionRangeParser)
 import Aihc.Cabal.Parser
 
 evaluateCondition :: Environment -> FlagAssignment -> Condition -> Bool

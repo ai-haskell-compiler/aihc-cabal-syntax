@@ -80,6 +80,13 @@ main = do
   testLegacy
   testSourceRepositories
   testBuildInfo
+  testConditionalSpelling
+  testElif
+  testImportCommas
+  testInternalLibraryNames
+  testRetainedFields
+  testOlderToolDependencies
+  testRepeatedPackageFields
   testErrors
   putStrLn "All parser checks passed"
 
@@ -285,14 +292,115 @@ testBuildInfo = do
   empty <- right (parseValue (parseBuildInfo ""))
   assert "Empty buildinfo" (BuildInfoFile Nothing Map.empty) empty
 
+-- | Cabal does not make a difference between upper case and lower case
+-- in section keywords. A parenthesis can follow the keyword directly.
+testConditionalSpelling :: IO ()
+testConditionalSpelling = do
+  pkg <- parse (BSC.unlines (map BSC.pack (header ++
+    [ "flag fast", "  default: False", "library"
+    , "  If flag(fast)", "    cpp-options: -DFAST"
+    , "  Else", "    cpp-options: -DSLOW"
+    , "  if(os(linux))", "    cpp-options: -DLINUX"
+    ])))
+  [Component _ bi] <- resolve Map.empty pkg
+  assert "Keyword spelling" ["-DSLOW", "-DLINUX"] (cppOptions bi)
+  [Component _ fast] <- resolve (Map.singleton "fast" True) pkg
+  assert "Keyword spelling with a flag" ["-DFAST", "-DLINUX"] (cppOptions fast)
+
+testElif :: IO ()
+testElif = do
+  let input = BSC.unlines (map BSC.pack (header ++
+        [ "library"
+        , "  if arch(wasm32)", "    hs-source-dirs: wasm"
+        , "  elif os(osx)", "    hs-source-dirs: darwin"
+        , "  elif os(linux)", "    hs-source-dirs: linux"
+        , "  else", "    hs-source-dirs: other"
+        ]))
+  pkg <- parse input
+  _ <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
+  [Component _ bi] <- resolve Map.empty pkg
+  assert "Select an elif branch" ["linux"] (sourceDirs bi)
+  let at os arch = do
+        resolved <- right (resolvePackage (Environment os arch Map.empty) Map.empty pkg)
+        pure [sourceDirs b | Component _ b <- resolvedComponents resolved]
+  darwin <- at "osx" "aarch64"
+  assert "Select the first elif branch" [["darwin"]] darwin
+  wasm <- at "wasi" "wasm32"
+  assert "Select the if branch" [["wasm"]] wasm
+  other <- at "windows" "x86_64"
+  assert "Select the else branch" [["other"]] other
+  -- Before cabal-version 2.2, Cabal ignores elif and gives a warning.
+  older <- parse "cabal-version: 2.0\nname: sample\nversion: 1\nlibrary\n  if os(osx)\n    cpp-options: -DOSX\n  elif os(linux)\n    cpp-options: -DLINUX\n  else\n    cpp-options: -DOTHER\n"
+  [Component _ olderInfo] <- resolve Map.empty older
+  assert "Ignore elif before 2.2" ["-DOTHER"] (cppOptions olderInfo)
+
+testImportCommas :: IO ()
+testImportCommas = do
+  let input = BSC.unlines (map BSC.pack (header ++
+        [ "common one", "  cpp-options: -DONE", "common two", "  cpp-options: -DTWO"
+        , "library", "  import:", "    , one", "    , two"
+        ]))
+  pkg <- parse input
+  _ <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
+  [Component _ bi] <- resolve Map.empty pkg
+  assert "Import list with leading commas" ["-DONE", "-DTWO"] (cppOptions bi)
+
+-- | Before cabal-version 3.4, an internal library name hides a package
+-- with the same name. From 3.4, a dependency name always identifies a package.
+testInternalLibraryNames :: IO ()
+testInternalLibraryNames = forM_ [("3.0", ("sample", NamedLibrary "mtl")), ("3.4", ("mtl", MainLibrary))] $ \(spec, expected) -> do
+  let input = BSC.unlines (map BSC.pack
+        [ "cabal-version: " ++ spec, "name: sample", "version: 1"
+        , "library", "  build-depends: mtl", "library mtl", "  build-depends: base"
+        ])
+  pkg <- parse input
+  ref <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
+  library <- maybe (fail "Missing reference library") (pure . C.libBuildInfo . C.condTreeData) (C.condLibrary ref)
+  (Component _ bi : _) <- resolve Map.empty pkg
+  assert ("Dependency name for " ++ spec) [expected]
+    [(dependencyPackage d, NE.head (dependencyLibraries d)) | d <- dependencies bi]
+  assert ("Reference dependency name for " ++ spec) [fst expected]
+    [T.pack (C.prettyShow (C.depPkgName d)) | d <- C.targetBuildDepends library]
+
+-- | The parser keeps fields that it does not interpret.
+testRetainedFields :: IO ()
+testRetainedFields = do
+  pkg <- parse (BSC.unlines (map BSC.pack (header ++
+    [ "library", "  reexported-modules: Data.Other, Data.Alias as Alias"
+    , "  mixins: base hiding (Prelude)", "  signatures: Hole"
+    ])))
+  [Component _ bi] <- resolve Map.empty pkg
+  assert "Module reexports" (Just ["Data.Other, Data.Alias as Alias"]) (Map.lookup "reexported-modules" (extraFields bi))
+  assert "Mixins" (Just ["base hiding (Prelude)"]) (Map.lookup "mixins" (extraFields bi))
+  assert "Signatures" (Just ["Hole"]) (Map.lookup "signatures" (extraFields bi))
+
+-- | Before cabal-version 2.0, Cabal keeps build-tool-depends and gives a warning.
+testOlderToolDependencies :: IO ()
+testOlderToolDependencies = do
+  let input = "cabal-version: >=1.10\nname: sample\nversion: 1\nlibrary\n  build-tool-depends: hspec-discover:hspec-discover\n  build-tools: happy\n"
+  pkg <- parse input
+  ref <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
+  library <- maybe (fail "Missing reference library") (pure . C.libBuildInfo . C.condTreeData) (C.condLibrary ref)
+  [Component _ bi] <- resolve Map.empty pkg
+  assert "Reference keeps the field" 1 (length (C.buildToolDepends library))
+  assert "Keep build-tool-depends" [Just "hspec-discover", Nothing] (map toolPackage (buildTools bi))
+
+-- | Cabal accepts repeated package fields with a warning.
+testRepeatedPackageFields :: IO ()
+testRepeatedPackageFields = do
+  pkg <- parse (BSC.unlines (map BSC.pack (header ++
+    ["extra-source-files: a.txt", "tested-with: GHC == 9.10", "extra-source-files: b.txt"])))
+  assert "Keep each value in source order" (Just ["a.txt", "b.txt"]) (Map.lookup "extra-source-files" (packageFields pkg))
+  forM_ ["name: other", "version: 2", "cabal-version: 3.0"] $ \field ->
+    case parseValue (parsePackage (BSC.unlines (map BSC.pack (header ++ [field])))) of
+      Left _ -> pure ()
+      Right _ -> fail ("Repeated field accepted: " ++ field)
+
 testErrors :: IO ()
 testErrors = do
   forM_
     [ ["library", "    buildable: True", "  other-modules: Lost"]
     , ["library", "  build-tools: happy"]
-    , ["library", "  signatures: Hole"]
-    , ["library", "  mixins: base hiding (Prelude)"]
-    , ["library", "  reexported-modules: Other"]
     , ["library", "  if flag(missing)", "    buildable: False"]
     , ["library", "  import: missing"]
     , ["library", "  buildable: maybe"]

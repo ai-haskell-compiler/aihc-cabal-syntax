@@ -86,6 +86,9 @@ testCompliance = do
         | component <- A.packageComponents extensionPackage, let tree = A.componentData component] }
   assert "Use older extensions from the AST"
     (fst (comparePackage changedExtensions extensionReference) == Mismatch)
+  forM_ ["==1 || ==2 || ==3", ">=1 && <3 && >1.1", "(==1 || ==2) || ==3"] $ \range -> do
+    let bytes = header <> "library\n  if impl(ghc " <> range <> ")\n    buildable: False\n"
+    assert "Keep compiler range structure" (outcome (compareBytes bytes) == Match)
   let toolBytes = header <> "library\n  build-tool-depends: alex:alex ^>=3.2.4\n  if impl(ghc ^>=9.2)\n    buildable: False\n"
   assert "Keep tool and compiler major bounds" (outcome (compareBytes toolBytes) == Match)
   forM_
