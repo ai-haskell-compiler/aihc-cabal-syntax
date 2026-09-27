@@ -33,6 +33,7 @@ toCabal pkg = do
         $ Map.insert "cabal-version" [A.renderVersion (A.cabalVersion pkg)]
         $ Map.adjust (const [A.buildType pkg]) "build-type" (A.packageFields pkg)
   pd <- fields spec C.packageDescriptionFieldGrammar retained
+  repositories <- traverse (sourceRepository spec) (A.packageSourceRepositories pkg)
   version <- convertVersion (A.packageVersion pkg)
   buildType <- if Map.member "build-type" (A.packageFields pkg)
     then Just <$> atom (A.buildType pkg) else Right Nothing
@@ -40,6 +41,7 @@ toCabal pkg = do
         { C.package = C.PackageIdentifier (C.mkPackageName (T.unpack (A.packageName pkg))) version
         , C.specVersion = spec
         , C.buildTypeRaw = buildType
+        , C.sourceRepos = repositories
         }
       flags = [C.MkPackageFlag (C.mkFlagName (T.unpack (A.flagName f))) ""
                 (A.flagDefault f) (A.flagManual f) | f <- A.packageFlags pkg]
@@ -47,13 +49,19 @@ toCabal pkg = do
         { C.packageDescription = description, C.genPackageFlags = flags }
   foldM (component spec) initial (A.packageComponents pkg)
 
+sourceRepository :: C.CabalSpecVersion -> A.SourceRepository -> Either String C.SourceRepo
+sourceRepository spec repository = do
+  kind <- atom (A.sourceRepositoryKind repository)
+  fields spec (C.sourceRepoFieldGrammar kind) (A.sourceRepositoryFields repository)
+
 fields :: C.CabalSpecVersion -> C.ParsecFieldGrammar s a -> Map.Map Text [Text] -> Either String a
 fields spec grammar retained = either (Left . show) Right
   (snd (C.runParseResult (C.parseFieldGrammar spec (fieldMap retained) grammar)))
   where
     -- Keep each occurrence and each retained line separately.
     fieldMap = Map.fromList . map (\(k, vs) -> (TE.encodeUtf8 k, map value vs)) . Map.toList
-    value text = C.MkNamelessField C.zeroPos [C.FieldLine C.zeroPos (TE.encodeUtf8 line) | line <- T.splitOn "\n" text]
+    value text = C.MkNamelessField C.zeroPos
+      [C.FieldLine C.zeroPos (TE.encodeUtf8 line) | line <- if T.null text then [] else T.splitOn "\n" text]
 
 atom :: C.Parsec a => Text -> Either String a
 atom text = maybe (Left ("Cannot convert field value: " ++ T.unpack text)) Right (C.simpleParsec (T.unpack text))

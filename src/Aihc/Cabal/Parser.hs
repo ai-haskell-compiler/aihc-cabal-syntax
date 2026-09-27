@@ -171,29 +171,31 @@ parsePackage bytes = report $ do
       bt = fromMaybe (if hasSetup then "Custom" else "Simple") (lookupField "build-type" fields)
   unless (bt `elem` ["Simple", "Configure", "Custom", "Make", "Hooks"])
     (failure 1 "Invalid build-type")
-  (_, flags, components) <- foldM (section spec) (Map.empty, [], []) sections
+  (_, flags, components, repositories) <- foldM (section spec) (Map.empty, [], [], []) sections
   ensureUnique [(1, flagName f) | f <- flags]
   ensureUnique [(1, T.pack (show (componentKind c))) | c <- components]
   let knownFlags = map flagName flags
   mapM_ (checkFlags knownFlags . componentData) components
   let libraries = [x | Component (Library (Just x)) _ <- components]
       normalized = map (normalizeComponent pkg libraries) components
-  pure (Package pkg version spec bt flags normalized topFields)
+  pure (Package pkg version spec bt flags normalized topFields repositories)
   where
     versionAt t = either (failure 1) Right (parseVersion t)
-    section spec (commons, flags, components) (n, header, body) = do
+    section spec (commons, flags, components, repositories) (n, header, body) = do
       let ws = case T.words header of { k:ks -> T.toLower k : ks; [] -> [] }
       case ws of
         ["common", key] -> do
           gate n spec "2.2" "common"
           when (Map.member key commons) (failure n "Duplicate common stanza")
           tree <- buildTree spec commons body
-          pure (Map.insert key tree commons, flags, components)
+          pure (Map.insert key tree commons, flags, components, repositories)
         ["flag", key] -> do
           flag <- readFlag n key body
-          pure (commons, flags ++ [flag], components)
-        ["custom-setup"] -> pure (commons, flags, components)
-        ["source-repository", _] -> pure (commons, flags, components)
+          pure (commons, flags ++ [flag], components, repositories)
+        ["custom-setup"] -> pure (commons, flags, components, repositories)
+        ["source-repository", kind] -> do
+          repository <- readSourceRepository kind body
+          pure (commons, flags, components, repositories ++ [repository])
         _ -> do
           kind <- case ws of
             ["library"] -> Right (Library Nothing)
@@ -204,7 +206,13 @@ parsePackage bytes = report $ do
             ["foreign-library", key] -> ForeignLibrary <$> value n name key
             _ -> failure n ("Unsupported section: " <> header)
           tree <- buildTree spec commons body
-          pure (commons, flags, components ++ [Component kind tree])
+          pure (commons, flags, components ++ [Component kind tree], repositories)
+
+readSourceRepository :: Text -> [Node] -> Result SourceRepository
+readSourceRepository kind body = SourceRepository kind <$> foldM field Map.empty body
+  where
+    field fields (Field _ key input) = Right (Map.insertWith (flip (++)) key [input] fields)
+    field _ (Section n _ _) = failure n "A source repository cannot contain sections"
 
 required :: Text -> [(Int, Text, Text)] -> Result (Int, Text)
 required key xs = case [(n,v) | (n,k,v) <- xs, k == key] of

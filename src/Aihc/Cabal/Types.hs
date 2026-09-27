@@ -125,6 +125,12 @@ mergeBuildInfo a b = BuildInfo
     prefer x Nothing = x
     prefer _ y = y
 
+-- | Repeated repository fields keep their values in source order.
+data SourceRepository = SourceRepository
+  { sourceRepositoryKind :: Text
+  , sourceRepositoryFields :: Map Text [Text]
+  } deriving (Eq, Show)
+
 data Package = Package
   { packageName :: Text
   , packageVersion :: Version
@@ -133,6 +139,7 @@ data Package = Package
   , packageFlags :: [Flag]
   , packageComponents :: [Component (Conditional BuildInfo)]
   , packageFields :: Map Text [Text]
+  , packageSourceRepositories :: [SourceRepository]
   } deriving (Eq, Show)
 
 data Environment = Environment

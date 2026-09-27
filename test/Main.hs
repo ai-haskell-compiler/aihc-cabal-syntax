@@ -76,6 +76,7 @@ main = do
   testConsumers
   testDefaults
   testLegacy
+  testSourceRepositories
   testBuildInfo
   testErrors
   putStrLn "All parser checks passed"
@@ -214,6 +215,32 @@ testLegacy = do
   assert "Library target set" (NamedLibrary "one" :| [NamedLibrary "two"])
     (dependencyLibraries (dependencies setInfo !! 1))
 
+testSourceRepositories :: IO ()
+testSourceRepositories = do
+  let input = BSC.unlines (map BSC.pack (header ++
+        [ "source-repository head", "  type: git"
+        , "  location: https://example.com/first", "  location: https://example.com/second"
+        , "  x-note: first", "    second"
+        , "library", "  exposed-modules: Sample"
+        , "source-repository this", "  type: git", "  tag: v1.2.3"
+        , "  subdir: \"source files\""
+        , "source-repository head", "  type: darcs", "  location: https://example.com/third"
+        ]))
+  pkg <- parse input
+  assert "Keep repository sections in source order"
+    [ SourceRepository "head" (Map.fromList
+        [ ("type", ["git"])
+        , ("location", ["https://example.com/first", "https://example.com/second"])
+        , ("x-note", ["first\nsecond"])
+        ])
+    , SourceRepository "this" (Map.fromList
+        [("type", ["git"]), ("tag", ["v1.2.3"]), ("subdir", ["\"source files\""])])
+    , SourceRepository "head" (Map.fromList
+        [("type", ["darcs"]), ("location", ["https://example.com/third"])])
+    ] (packageSourceRepositories pkg)
+  empty <- parse (BSC.unlines (map BSC.pack header))
+  assert "Absent repositories" [] (packageSourceRepositories empty)
+
 testBuildInfo :: IO ()
 testBuildInfo = do
   let input = "cc-options: -DHOOKED\ncpp-options: -DHOOKED_HS\ninclude-dirs: generated\nc-sources: generated.c\nexecutable: sample-tool\ncpp-options: -DEXE\n"
@@ -244,6 +271,7 @@ testErrors = do
     , ["common a", "  import: a", "library", "  import: a"]
     , ["library", "  other-modules: Sample", "  import: a"]
     , ["library", "  buildable: True", "library", "  buildable: True"]
+    , ["source-repository head", "  if True", "    type: git"]
     ] $ \body -> reject (BSC.unlines (map BSC.pack (header ++ body)))
   reject "name: sample\nversion: 1\n"
   reject "cabal-version: 99\nname: sample\nversion: 1\n"
