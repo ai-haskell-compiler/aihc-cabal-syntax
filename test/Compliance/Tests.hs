@@ -18,6 +18,12 @@ header = "cabal-version: 3.0\nname: sample\nversion: 1.0\n"
 
 testCompliance :: IO ()
 testCompliance = do
+  forM_ ["1.0", "1.2", "1.4", "1.6", "1.8"] $ \spec ->
+    forM_ ["", ">="] $ \prefix -> do
+      let bytes = "cabal-version: " <> prefix <> spec
+            <> "\nname: sample\nversion: 1\nbuild-type: Simple\nlibrary\n  exposed-modules: Sample\n  build-depends: base >=3 && <5\n"
+      assert ("Compare older format " ++ BSC.unpack (prefix <> spec))
+        (outcome (compareBytes bytes) == Match)
   forM_
     [ "library\n  exposed-modules: Sample\n  build-depends: base >=4 && <5\n"
     , "library\n"

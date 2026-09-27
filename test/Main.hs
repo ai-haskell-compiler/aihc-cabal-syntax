@@ -9,6 +9,7 @@ import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import Aihc.Cabal
 import qualified Distribution.PackageDescription as C
 import qualified Distribution.PackageDescription.Parsec as C
@@ -219,6 +220,12 @@ testEmptySections = do
 
 testLegacy :: IO ()
 testLegacy = do
+  forM_ ["1.0", "1.2", "1.4", "1.6", "1.8"] $ \spec -> do
+    older <- parse ("cabal-version: >=" <> TE.encodeUtf8 spec
+      <> "\nname: sample\nversion: 1\nlibrary\n  exposed-modules: Sample\n")
+    assert "Keep the older format version" (version spec) (cabalVersion older)
+    assert "Keep the older library modules" [["Sample"]]
+      (map (exposedModules . unconditional . componentData) (packageComponents older))
   let input = "cabal-version: >=1.10\nname: legacy\nversion: 1\nlibrary\n  extensions: CPP\n  build-tools: happy >=1.20\n"
   pkg <- parse input
   _ <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
@@ -299,6 +306,7 @@ testErrors = do
     ] $ \body -> reject (BSC.unlines (map BSC.pack (header ++ body)))
   reject "name: sample\nversion: 1\n"
   reject "cabal-version: 99\nname: sample\nversion: 1\n"
+  reject "cabal-version: 0.9\nname: sample\nversion: 1\n"
   reject (BS.pack [255,254])
   let bad = parsePackage (BSC.unlines (map BSC.pack (header ++ ["library", "  buildable: invalid"])))
   case parseValue bad of

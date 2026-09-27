@@ -73,12 +73,13 @@ The parser supports these features:
 - Custom fields, including `x-aihc-lir-sources`.
 - Version comparisons, intersections, unions, wildcards, major bounds, and version sets.
 
-The parser accepts format versions from 1.10 through 3.14.
+The parser accepts format versions from 1.0 through 3.14.
 It supports an exact `cabal-version` and the older `>=` form before 2.2.
 This range is an input limit, not a claim of complete format conformance.
 
 The MVP has these limits:
 
+- Build fields outside component sections stay in `packageFields`. The parser does not convert these fields into components.
 - Explicit layout braces, semicolon layout, and `elif` sections are not supported.
 - Signatures, mixins, and module reexports produce errors, including in inactive branches.
 - Package fields not used by this API stay in `packageFields` as text.

@@ -162,10 +162,10 @@ parsePackage bytes = report $ do
   exactFrom <- versionAt "2.2"
   when (">=" `T.isPrefixOf` T.strip specText && spec >= exactFrom)
     (failure specLine "Use an exact cabal-version from 2.2")
-  lower <- versionAt "1.10"
+  lower <- versionAt "1.0"
   upper <- versionAt "3.14"
   unless (spec >= lower && spec <= upper)
-    (failure specLine "Supported Cabal format versions are 1.10 through 3.14")
+    (failure specLine "Supported Cabal format versions are 1.0 through 3.14")
   let topFields = Map.fromList [(k,[v]) | (_,k,v) <- fields]
       hasSetup = any (\(_,k,_) -> T.toLower k == "custom-setup") sections
       bt = fromMaybe (if hasSetup then "Custom" else "Simple") (lookupField "build-type" fields)
