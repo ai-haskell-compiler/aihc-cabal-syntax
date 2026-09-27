@@ -148,3 +148,21 @@ The measurement uses a monotonic clock and the child process peak resident set s
 RSS includes the runtime and archive buffers. It is not the Haskell heap size.
 The saved data records the Nix system and GHC version.
 Run the update command on the same machine for performance comparisons.
+
+## Weekly results
+
+The `Update Hackage results` workflow runs each Monday at 05:17 UTC.
+You can also start it with `workflow_dispatch`.
+It compares the full report with `tests/hackage/results.json`.
+If the results are unchanged, it keeps the saved benchmark and opens no new pull request.
+A change in benchmark time alone does not cause a pull request.
+
+If the results change, the workflow measures a new benchmark and updates the README and baseline.
+It runs both required Nix checks before it opens or updates `codex/weekly-hackage-results`.
+Review the changed counts before merge. The workflow does not merge the pull request.
+It does not change the Hackage index or dependency pins.
+
+The schedule starts after the workflow file is on `main`.
+The repository must permit GitHub Actions to create pull requests.
+The workflow uses `GITHUB_TOKEN`. Its pull request does not start another CI run.
+The weekly workflow runs the checks before it creates the pull request.

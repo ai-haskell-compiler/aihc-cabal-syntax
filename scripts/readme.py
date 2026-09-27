@@ -56,8 +56,13 @@ def main():
     parser.add_argument("--system")
     parser.add_argument("--ghc-version")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--refresh-stats", action="store_true")
     args = parser.parse_args()
     summary = json.loads(args.summary.read_text())
+    results = Path("tests/hackage/results.json")
+    if args.refresh_stats and json.loads(results.read_text()) == summary:
+        print("Hackage results are unchanged")
+        return
     data = Path("tests/hackage/benchmark.json")
     if args.check:
         benchmark = json.loads(data.read_text())
@@ -76,11 +81,16 @@ def main():
                          system=args.system, ghc_version=args.ghc_version)
     readme = render(summary, benchmark)
     if args.check:
+        if json.loads(results.read_text()) != summary:
+            raise ValueError("Saved Hackage results differ from the report")
         if Path("README.md").read_text() != readme:
             raise ValueError("README results differ. Run nix run .#update-readme")
     else:
         data.write_text(json.dumps(benchmark, indent=2) + "\n")
         Path("README.md").write_text(readme)
+        results.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        if args.refresh_stats:
+            Path("tests/hackage/baseline.json").write_text(results.read_text())
 
 
 if __name__ == "__main__":

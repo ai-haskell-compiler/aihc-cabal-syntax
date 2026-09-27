@@ -44,9 +44,11 @@
         name = "update-readme";
         runtimeInputs = [ pkgs.python3 ];
         text = ''
+          python ${./tests/hackage/check_baseline.py} ${compliance system} \
+            ${compliance system}/summary.json ${./tests/hackage/snapshot.json}
           python ${./scripts/readme.py} ${compliance system}/summary.json \
             --runner ${benchmark system} --index ${corpus system}/index.tar \
-            --system ${system} --ghc-version ${pkgs.haskellPackages.ghc.version}
+            --system ${system} --ghc-version ${pkgs.haskellPackages.ghc.version} "$@"
         '';
       };
     corpus = system: let
@@ -88,11 +90,21 @@
         cp ${./README.md} README.md
         mkdir -p tests/hackage
         cp ${./tests/hackage/benchmark.json} tests/hackage/benchmark.json
+        cp ${./tests/hackage/results.json} tests/hackage/results.json
         python ${./scripts/readme.py} ${compliance system}/summary.json --check
         touch "$out"
       '';
       benchmark-runner = pkgs.runCommand "check-benchmark-runner" { nativeBuildInputs = [ pkgs.python3 ]; } ''
         python ${./tests/hackage/check_benchmark.py} ${benchmark system}
+        touch "$out"
+      '';
+      stats-update = pkgs.runCommand "check-stats-update" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+        export PYTHONDONTWRITEBYTECODE=1
+        python ${./tests/hackage/check_stats_update.py} ${./scripts/readme.py}
+        touch "$out"
+      '';
+      workflows = pkgs.runCommand "check-workflows" { nativeBuildInputs = [ pkgs.actionlint ]; } ''
+        actionlint ${./.github/workflows/ci.yml} ${./.github/workflows/weekly-stats.yml}
         touch "$out"
       '';
       parser = package system;
