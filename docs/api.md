@@ -41,6 +41,9 @@ Add `[]` to constructor calls that have no source repositories.
 Set `packageSourceRepositories` when you create a `Package` with record syntax.
 Update constructor patterns for the new argument.
 
+`VersionRange` exports its constructors.
+Use them to examine, simplify, or show a range in a different notation.
+
 `resolvePackage` applies explicit flags over flag defaults.
 It evaluates conditions and merges active fields.
 It returns all components, including components with `buildable: False`.

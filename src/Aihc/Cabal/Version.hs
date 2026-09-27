@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Aihc.Cabal.Version
   ( Version, versionNumbers, mkVersion, parseVersion, renderVersion
-  , VersionRange, anyVersion, thisVersion, withinRange, intersectRanges
+  , VersionRange (..), anyVersion, thisVersion, withinRange, intersectRanges
   , unionRanges, parseVersionRange, renderVersionRange, versionParser, rangeParser
   ) where
 
