@@ -3,14 +3,14 @@
     "Cabal-syntax": {
       "total": 200642,
       "accepted": 200615,
-      "elapsed_seconds": 104.27504845801741,
+      "elapsed_seconds": 117.64104549994227,
       "peak_rss_bytes": 40009728
     },
     "aihc": {
       "total": 200642,
-      "accepted": 119059,
-      "elapsed_seconds": 26.914078125031665,
-      "peak_rss_bytes": 26050560
+      "accepted": 174917,
+      "elapsed_seconds": 37.196069499943405,
+      "peak_rss_bytes": 27099136
     }
   },
   "reference_version": "3.12.1.0",
