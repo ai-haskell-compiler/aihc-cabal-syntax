@@ -20,6 +20,15 @@ testCompliance :: IO ()
 testCompliance = do
   forM_
     [ "library\n  exposed-modules: Sample\n  build-depends: base >=4 && <5\n"
+    , "library\n"
+    , "library\n  -- No fields\n"
+    , "flag fast\nlibrary\n  if flag(fast)\n  else\n    cpp-options: -DSLOW\n"
+    , "library\n  if True\n    cpp-options: -DFAST\n  else\n"
+    , "library\n  if True\n  else\n  other-modules: Sample\n"
+    , "library\n  if True\n    if False\n    else\n  else\n    cpp-options: -DSLOW\n"
+    , "common shared\nlibrary\n  import: shared\n"
+    , "library internal\nlibrary\nexecutable tool\n  main-is: Main.hs\n"
+    , "executable tool\n"
     , "flag fast\n  default: False\nlibrary\n  if flag(fast)\n    cpp-options: -DFAST\n  else\n    buildable: False\n"
     , "common shared\n  hs-source-dirs: src\n  ghc-options: -Wall\nlibrary\n  import: shared\n"
     , "library internal\n  exposed-modules: Internal\nexecutable tool\n  main-is: Main.hs\n  build-depends: sample:internal\n"
