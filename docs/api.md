@@ -138,13 +138,13 @@ It supports these features:
 - Package dependencies, library targets, mixins, and modern and legacy build tools.
 - The rules of each Cabal format version for list separators, version ranges, and fields.
 - The Cabal-syntax rules for repeated fields, unknown fields, and unknown sections.
+- The Cabal-syntax patches for 57 known Hackage files. A patched file gets the warning "Legacy cabal file".
 
 The parser accepts format versions from 1.0 through 3.14.
 Cabal-syntax 3.18 also accepts format version 3.16. This parser does not.
 
 The parser has these limits:
 
-- Cabal-syntax changes 59 known Hackage files before it parses them. This parser does not.
 - Package fields not used by this API stay in `packageFields` as text.
 - Component fields not used by this API stay in `extraFields` as text.
 - The parser does not validate these text fields. Cabal-syntax can reject a value that this parser keeps.

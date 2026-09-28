@@ -130,6 +130,7 @@ testPackage = do
   pkg <- parse fixture
   ref <- right (snd (runResult (C.parseGenericPackageDescription fixture)))
   assert "Package name" "sample" (packageName pkg)
+  assert "No warnings for a file without patches" [] (parseWarnings (parsePackage fixture))
   assert "Component count" 6 (length (packageComponents pkg))
   assert "Flag declarations" [Flag "fast" True False ""] (packageFlags pkg)
   forM_ [True, False] $ \fast -> do
