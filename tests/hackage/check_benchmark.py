@@ -16,7 +16,7 @@ with tempfile.TemporaryDirectory() as directory:
             ("sample.cabal", b"invalid input\n"),
             ("package.json", b"{}"),
             ("old.cabal", b"name: old\nversion: 1\n"),
-            # Cabal-syntax 3.18 accepts format version 3.16. The aihc parser does not.
+            # Both parsers accept format version 3.16.
             ("new.cabal", b"cabal-version: 3.16\nname: new\nversion: 1\n"),
         ]:
             entry = tarfile.TarInfo(name)
@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory() as directory:
     for parser in ["aihc", "Cabal-syntax"]:
         result = run(parser)
         assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == ("4 2" if parser == "aihc" else "4 3"), result.stdout
+        assert result.stdout.strip() == "4 3", result.stdout
     with tarfile.open(index, "w"):
         pass
     for parser in ["aihc", "Cabal-syntax"]:

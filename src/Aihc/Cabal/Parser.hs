@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Read package descriptions. The rules follow the package parser of
--- Cabal-syntax 3.12. Cabal format version 3.14 and build type @Hooks@ are
--- also accepted.
+-- Cabal-syntax 3.18. The parser accepts Cabal format versions up to 3.18.
 module Aihc.Cabal.Parser (parsePackage, parseBuildInfo) where
 
 import Control.Monad (foldM, guard, unless, when)
@@ -146,7 +145,7 @@ freeText3 pos (FieldLine p1 x1 : rest@(FieldLine p2 _ : _))
 -- unknown version.
 knownSpec :: NonEmpty Integer -> Maybe Version
 knownSpec ds = case NE.toList ds of
-  v | v `elem` [[3, 14], [3, 12], [3, 8], [3, 6], [3, 4], [3, 0], [2, 4], [2, 2], [2, 0]] -> Just (specVersion v)
+  v | v `elem` [[3, 18], [3, 16], [3, 14], [3, 12], [3, 8], [3, 6], [3, 4], [3, 0], [2, 4], [2, 2], [2, 0]] -> Just (specVersion v)
     | v >= [1, 25] -> Nothing
     | otherwise -> specVersion . snd <$> find ((v >=) . fst) older
   where
@@ -323,8 +322,8 @@ buildInfoFields :: Version -> Kind -> Fields -> Result BuildInfo
 buildInfoFields spec kind fs = do
   mapM_ removed [([3, 0], "hs-source-dir"), ([3, 0], "extensions"), ([3, 0], "build-tools")]
   buildable' <- singular (parseField bool) (get "buildable")
-  dirs <- monoidal (spaceList spec sourceDir) (get "hs-source-dirs")
-  oldDirs <- monoidal (spaceList spec sourceDir) (get "hs-source-dir")
+  dirs <- monoidal (spaceList spec filePath) (get "hs-source-dirs")
+  oldDirs <- monoidal (spaceList spec filePath) (get "hs-source-dir")
   exposed <- if kind == LibraryKind then modules (get "exposed-modules") else pure []
   other <- modules (get "other-modules")
   autogen <- modules (since [2, 0] "autogen-modules")
@@ -440,6 +439,8 @@ parsePackage bytes = report $ do
       knownFlags = map flagName flags
   when (bt == "Custom" && not (isJust setup) && specAtLeast [1, 24] spec)
     (failAt zeroPosition "Since cabal-version: 1.24 specifying custom-setup section is mandatory")
+  when (bt == "Hooks" && not (isJust setup))
+    (failAt zeroPosition "Packages with build-type: Hooks require a custom-setup stanza")
   mapM_ (checkFlags knownFlags . componentData) components
   let libraries = [x | not (specAtLeast [3, 4] spec), Component (Library (Just x)) _ <- components]
       internal = internalDependencies pkg libraries
