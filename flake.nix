@@ -46,7 +46,10 @@
         text = ''
           python ${./tests/hackage/check_baseline.py} ${compliance system} \
             ${compliance system}/summary.json ${./tests/hackage/snapshot.json}
+          python ${./tests/hackage/check_stackage.py} ${stackageCompliance system} \
+            ${./tests/hackage/stackage.json}
           python ${./scripts/readme.py} ${compliance system}/summary.json \
+            --stackage ${stackageCompliance system} \
             --runner ${benchmark system} --index ${corpus system}/index.tar \
             --system ${system} --ghc-version ${pkgs.haskellPackages.ghc.version} "$@"
         '';
@@ -78,12 +81,26 @@
         ${runner system} ${corpus system}/index.tar "$out"
         cp ${./tests/hackage/snapshot.json} "$out/snapshot.json"
       '';
+    # The pinned nixpkgs revision supplies the Stackage LTS package list.
+    stackageCorpus = system: let pkgs = pkgsFor system; in
+      pkgs.runCommand "stackage-cabal-corpus" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+        python ${./tests/hackage/stackage.py} \
+          ${nixpkgs}/pkgs/development/haskell-modules/configuration-hackage2nix/stackage.yaml \
+          ${corpus system}/index.tar ${corpus system}/manifest.jsonl "$out"
+      '';
+    stackageCompliance = system: let pkgs = pkgsFor system; in
+      pkgs.runCommand "stackage-compliance" {} ''
+        ${runner system} ${stackageCorpus system}/index.tar "$out"
+        cp ${stackageCorpus system}/summary.json "$out/snapshot.json"
+      '';
   in {
     packages = each (system: {
       default = package system;
       update-readme = updateReadme system;
       hackage-corpus = corpus system;
       hackage-compliance = compliance system;
+      stackage-corpus = stackageCorpus system;
+      stackage-compliance = stackageCompliance system;
     });
     checks = each (system: let pkgs = pkgsFor system; in {
       readme = pkgs.runCommand "check-readme" { nativeBuildInputs = [ pkgs.python3 ]; } ''
@@ -91,7 +108,8 @@
         mkdir -p tests/hackage
         cp ${./tests/hackage/benchmark.json} tests/hackage/benchmark.json
         cp ${./tests/hackage/results.json} tests/hackage/results.json
-        python ${./scripts/readme.py} ${compliance system}/summary.json --check
+        python ${./scripts/readme.py} ${compliance system}/summary.json \
+          --stackage ${stackageCompliance system} --check
         touch "$out"
       '';
       benchmark-runner = pkgs.runCommand "check-benchmark-runner" { nativeBuildInputs = [ pkgs.python3 ]; } ''
@@ -108,6 +126,12 @@
         touch "$out"
       '';
       parser = package system;
+      stackage-compliance = pkgs.runCommand "check-stackage-compliance" {
+        nativeBuildInputs = [ pkgs.python3 ];
+      } ''
+        python ${./tests/hackage/check_stackage.py} ${stackageCompliance system} ${./tests/hackage/stackage.json}
+        touch "$out"
+      '';
       hackage-compliance = pkgs.runCommand "check-hackage-baseline" {
         nativeBuildInputs = [ pkgs.python3 ];
       } ''

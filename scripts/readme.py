@@ -9,7 +9,27 @@ import sys
 import time
 
 
-def render(summary, benchmark):
+def stackage_section(stackage):
+    if stackage is None:
+        return []
+    summary, snapshot = stackage
+    total = summary["total"]
+    def row(label, count):
+        return f"| {label} | {count:,} | {100 * count / total:.2f}% |"
+    return [
+        "## Stackage LTS results", "",
+        f"The Stackage test uses **{snapshot['snapshot']}** with **{total:,} packages**.",
+        "The pinned Nixpkgs revision supplies the package list.",
+        "The test uses the last revision of each package version in the fixed Hackage index.", "",
+        "| Result | Packages | All packages |", "| --- | ---: | ---: |",
+        row("aihc-cabal-syntax accepts", summary["parser_accepted"]),
+        row("Cabal-syntax accepts", summary["reference_accepted"]),
+        row("Equal converted data", summary["outcomes"]["match"]), "",
+        "The Nix check fails if a package in the snapshot does not have equal converted data.", "",
+    ]
+
+
+def render(summary, benchmark, stackage=None):
     total = summary["total"]
     ours = benchmark["parsers"]["aihc"]
     reference = benchmark["parsers"]["Cabal-syntax"]
@@ -43,6 +63,7 @@ def render(summary, benchmark):
         "An accepted file does not prove full compliance.",
         "The equality test compares complete `GenericPackageDescription` values after conversion of our AST.",
         "Conversion limits can also cause differences. This library is not a complete replacement for Cabal-syntax.", "",
+        *stackage_section(stackage),
         "## Parse benchmark", "",
         f"Each parser reads all **{total:,} revisions** in a separate process on the same machine.", "",
         "| Measurement | aihc-cabal-syntax | Cabal-syntax | aihc / Cabal-syntax |",
@@ -67,6 +88,7 @@ def render(summary, benchmark):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("summary", type=Path)
+    parser.add_argument("--stackage", type=Path)
     parser.add_argument("--runner")
     parser.add_argument("--index")
     parser.add_argument("--system")
@@ -99,7 +121,11 @@ def main():
                 peak_rss_bytes=int(usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024)))
         benchmark = dict(parsers=measurements, reference_version=summary["reference_version"],
                          system=args.system, ghc_version=args.ghc_version)
-    readme = render(summary, benchmark)
+    stackage = None
+    if args.stackage:
+        stackage = (json.loads((args.stackage / "summary.json").read_text()),
+                    json.loads((args.stackage / "snapshot.json").read_text()))
+    readme = render(summary, benchmark, stackage)
     if args.check:
         if json.loads(results.read_text()) != summary:
             raise ValueError("Saved Hackage results differ from the report")

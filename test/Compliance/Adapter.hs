@@ -28,20 +28,22 @@ toCabal :: A.Package -> Either String C.GenericPackageDescription
 toCabal pkg = do
   spec <- maybe (Left "Unsupported Cabal format version") Right
     (C.cabalSpecFromVersionDigits (map fromInteger (NE.toList (A.versionNumbers (A.cabalVersion pkg)))))
-  let retained = Map.insert "name" [A.packageName pkg]
-        $ Map.insert "version" [A.renderVersion (A.packageVersion pkg)]
-        $ Map.insert "cabal-version" [A.renderVersion (A.cabalVersion pkg)]
-        $ Map.adjust (const [A.buildType pkg]) "build-type" (A.packageFields pkg)
-  pd <- fields spec C.packageDescriptionFieldGrammar retained
+  -- The typed name, version, and format version replace the retained text.
+  let retained = foldr Map.delete (A.packageFields pkg) ["name", "version", "cabal-version"]
+  pd <- fields spec C.packageDescriptionFieldGrammar
+    (Map.insert "name" [text (A.packageName pkg)] (Map.insert "version" [text "0"] retained))
   repositories <- traverse (sourceRepository spec) (A.packageSourceRepositories pkg)
   flags <- traverse (flag spec) (A.packageFlags pkg)
   version <- convertVersion (A.packageVersion pkg)
-  buildType <- if Map.member "build-type" (A.packageFields pkg)
-    then Just <$> atom (A.buildType pkg) else Right Nothing
+  -- The grammar tells if the file sets a build type. The value is typed.
+  buildType <- traverse (const (atom (A.buildType pkg))) (C.buildTypeRaw pd)
+  setup <- traverse (fmap (\deps -> C.SetupBuildInfo deps False) . traverse convertDependency)
+    (A.packageSetupDependencies pkg)
   let description = pd
         { C.package = C.PackageIdentifier (C.mkPackageName (T.unpack (A.packageName pkg))) version
         , C.specVersion = spec
         , C.buildTypeRaw = buildType
+        , C.setupBuildInfo = setup
         , C.sourceRepos = repositories
         }
       initial = C.emptyGenericPackageDescription
@@ -51,7 +53,7 @@ toCabal pkg = do
 flag :: C.CabalSpecVersion -> A.Flag -> Either String C.PackageFlag
 flag spec f = do
   raw <- fields spec (C.flagFieldGrammar (C.mkFlagName (T.unpack (A.flagName f))))
-    (Map.singleton "description" [A.flagDescription f])
+    (Map.singleton "description" [text (A.flagDescription f)])
   pure raw { C.flagDefault = A.flagDefault f, C.flagManual = A.flagManual f }
 
 sourceRepository :: C.CabalSpecVersion -> A.SourceRepository -> Either String C.SourceRepo
@@ -59,18 +61,24 @@ sourceRepository spec repository = do
   kind <- atom (A.sourceRepositoryKind repository)
   fields spec (C.sourceRepoFieldGrammar kind) (A.sourceRepositoryFields repository)
 
-fields :: C.CabalSpecVersion -> C.ParsecFieldGrammar s a -> Map.Map Text [Text] -> Either String a
+fields :: C.CabalSpecVersion -> C.ParsecFieldGrammar s a -> Map.Map Text [A.FieldValue] -> Either String a
 fields spec grammar retained = either (Left . show) Right
   (snd (C.runParseResult (C.parseFieldGrammar spec (fieldMap retained) grammar)))
   where
-    -- Keep each occurrence and each retained line separately.
+    -- Keep each occurrence, each line, and each source position.
     fieldMap = Map.fromList . map (\(k, vs) -> (TE.encodeUtf8 k, map value vs)) . Map.toList
-    value text = C.MkNamelessField C.zeroPos
-      [C.FieldLine (C.Position row 1) (TE.encodeUtf8 line)
-      | (row, line) <- zip [1..] (dropWhile T.null (T.splitOn "\n" text))]
+    value (A.FieldValue p ls) = C.MkNamelessField (position p)
+      [C.FieldLine (position q) (TE.encodeUtf8 line) | A.FieldLine q line <- ls]
+    position (A.Position row column) = C.Position row column
+
+-- | A field value for text that has no source position. Each line gets a
+-- new row, so that Cabal free text rules give the same text.
+text :: Text -> A.FieldValue
+text value = A.FieldValue (A.Position 0 0)
+  [A.FieldLine (A.Position row 1) line | not (T.null value), (row, line) <- zip [1 ..] (T.splitOn "\n" value)]
 
 atom :: C.Parsec a => Text -> Either String a
-atom text = maybe (Left ("Cannot convert field value: " ++ T.unpack text)) Right (C.simpleParsec (T.unpack text))
+atom input = maybe (Left ("Cannot convert field value: " ++ T.unpack input)) Right (C.simpleParsec (T.unpack input))
 
 convertVersion :: A.Version -> Either String C.Version
 convertVersion v = do
@@ -80,9 +88,16 @@ convertVersion v = do
     else Right (C.mkVersion (map fromInteger digits))
 
 convertRange :: A.VersionRange -> Either String C.VersionRange
-convertRange range
-  | range == A.anyVersion = Right C.anyVersion
-  | otherwise = atom (A.renderVersionRange range)
+convertRange range = case range of
+  A.AnyVersion -> Right C.anyVersion
+  A.Equal v -> C.thisVersion <$> convertVersion v
+  A.Later v -> C.laterVersion <$> convertVersion v
+  A.Earlier v -> C.earlierVersion <$> convertVersion v
+  A.AtLeast v -> C.orLaterVersion <$> convertVersion v
+  A.AtMost v -> C.orEarlierVersion <$> convertVersion v
+  A.MajorBound v -> C.majorBoundVersion <$> convertVersion v
+  A.Both a b -> C.intersectVersionRanges <$> convertRange a <*> convertRange b
+  A.EitherRange a b -> C.unionVersionRanges <$> convertRange a <*> convertRange b
 
 convertDependency :: A.Dependency -> Either String C.Dependency
 convertDependency dep = do
@@ -93,33 +108,61 @@ convertDependency dep = do
     target A.MainLibrary = C.LMainLibName
     target (A.NamedLibrary name) = C.LSubLibName (C.mkUnqualComponentName (T.unpack name))
 
+convertMixin :: A.Mixin -> Either String C.Mixin
+convertMixin (A.Mixin pkg lib provides requires) = do
+  provides' <- renaming provides
+  requires' <- renaming requires
+  pure (C.Mixin (C.mkPackageName (T.unpack pkg)) (library lib) (C.IncludeRenaming provides' requires'))
+  where
+    library A.MainLibrary = C.LMainLibName
+    library (A.NamedLibrary name) = C.LSubLibName (C.mkUnqualComponentName (T.unpack name))
+    renaming A.DefaultRenaming = Right C.DefaultRenaming
+    renaming (A.ModuleRenaming pairs) = C.ModuleRenaming <$> traverse (\(a, b) -> (,) <$> atom a <*> atom b) pairs
+    renaming (A.HidingRenaming names) = C.HidingRenaming <$> traverse atom names
+
 convertBuildInfo :: C.BuildInfo -> A.BuildInfo -> Either String C.BuildInfo
 convertBuildInfo raw bi = do
   other <- traverse atom (A.otherModules bi)
   autogen <- traverse atom (A.autogenModules bi)
+  virtual <- traverse atom (A.virtualModules bi)
   language <- traverse atom (A.defaultLanguage bi)
+  otherLanguages <- traverse atom (A.otherLanguages bi)
   extensions <- traverse atom (A.extensions bi)
+  otherExtensions <- traverse atom (A.otherExtensions bi)
   legacyExtensions <- traverse atom (A.legacyExtensions bi)
   dependencies <- traverse convertDependency (A.dependencies bi)
+  mixins <- traverse convertMixin (A.mixins bi)
   modern <- traverse modernTool [t | t <- A.buildTools bi, Just _ <- [A.toolPackage t]]
   legacy <- traverse legacyTool [t | t <- A.buildTools bi, Nothing <- [A.toolPackage t]]
   let C.PerCompilerFlavor _ ghcjs = C.options raw
   pure raw
     { C.buildable = fromMaybe True (A.buildable bi)
-    , C.hsSourceDirs = map C.unsafeMakeSymbolicPath (A.sourceDirs bi) ++ C.hsSourceDirs raw
+    , C.hsSourceDirs = map C.unsafeMakeSymbolicPath (A.sourceDirs bi)
     , C.otherModules = other
     , C.autogenModules = autogen
+    , C.virtualModules = virtual
     , C.defaultLanguage = language
+    , C.otherLanguages = otherLanguages
     , C.defaultExtensions = extensions
+    , C.otherExtensions = otherExtensions
     , C.oldExtensions = legacyExtensions
     , C.targetBuildDepends = dependencies
+    , C.mixins = mixins
     , C.buildTools = legacy
     , C.buildToolDepends = modern
     , C.cSources = A.cSources bi
     , C.cxxSources = A.cxxSources bi
+    , C.asmSources = A.asmSources bi
+    , C.cmmSources = A.cmmSources bi
+    , C.jsSources = A.jsSources bi
     , C.includeDirs = A.includeDirs bi
+    , C.includes = A.includes bi
     , C.installIncludes = A.installIncludes bi
     , C.autogenIncludes = A.autogenIncludes bi
+    , C.extraLibDirs = A.extraLibDirs bi
+    , C.extraLibDirsStatic = A.extraLibDirsStatic bi
+    , C.frameworks = map T.unpack (A.frameworks bi)
+    , C.extraFrameworkDirs = A.extraFrameworkDirs bi
     , C.cppOptions = map T.unpack (A.cppOptions bi)
     , C.ccOptions = map T.unpack (A.ccOptions bi)
     , C.cxxOptions = map T.unpack (A.cxxOptions bi)

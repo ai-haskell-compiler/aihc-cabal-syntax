@@ -31,42 +31,86 @@ In `impl` conditions, these operators associate to the left.
 Explicit parentheses keep the specified structure.
 
 `Package` contains flag declarations and conditional components.
-`flagDescription` keeps the description text, including line breaks and dot lines.
+`flagDescription` contains the description text after the Cabal free text rules.
+Before `cabal-version` 3.0, each line has no leading or trailing spaces, and a dot line becomes an empty line.
+From `cabal-version` 3.0, the text keeps blank lines and relative indentation.
 An absent description has the value `""`.
-The `Flag` constructor has a new final argument for the description.
-Add `""` to constructor calls that have no description.
-Set `flagDescription` when you create a `Flag` with record syntax.
-Update constructor patterns for the new argument.
+
+`cabalVersion` contains the Cabal specification version that Cabal-syntax uses for the file.
+For example, `cabal-version: >=1.9` gives version 1.10.
+A file without a `cabal-version` field has version 1.0.
+`buildType` contains the build type that Cabal-syntax uses.
+Without a `build-type` field, the value is `Simple` from `cabal-version` 2.2.
+If a `custom-setup` section is present, the value is `Custom`.
+Before `cabal-version` 2.2, the value is `Custom`.
+
+## Field values
+
+`packageFields`, `extraFields`, and the fields of a `SourceRepository` contain `FieldValue` values.
+A `FieldValue` contains the position of the field name and each line of the value with its position.
+Use `fieldText` to get the lines joined with line breaks.
+Columns count UTF-8 bytes, as in Cabal-syntax.
+The parser does not include comment lines and blank lines in the lines.
+Cabal free text rules and the order of `x-` fields use these positions.
+
+`packageFields` contains all fields before the first section, in source order for each name.
+This includes `name`, `version`, `cabal-version`, and `build-type`.
+Cabal-syntax ignores package fields after the first section. The parser also ignores them.
+
+To migrate from version 0.1 of the field maps, replace each `Text` value with `fieldText value`.
+To make a new value, use `FieldValue (Position 1 1) [FieldLine (Position 1 1) text]`.
 
 `packageSourceRepositories` contains source repository sections in source order.
-Each `SourceRepository` contains a kind and a map of field names to text values.
+Each `SourceRepository` contains a kind and a map of field names to values.
 Repeated fields keep their values in source order. The parser keeps unknown fields.
 The values keep quotation marks for conversion by the caller.
 
-The `Package` constructor has a new final argument for source repositories.
-Add `[]` to constructor calls that have no source repositories.
-Set `packageSourceRepositories` when you create a `Package` with record syntax.
-Update constructor patterns for the new argument.
+`packageSetupDependencies` contains the `setup-depends` values of a `custom-setup` section.
+The value is `Nothing` if the file has no `custom-setup` section.
+Set it to `Nothing` when you create a `Package` without this data.
+
+## Build information
 
 `VersionRange` exports its constructors.
 Use them to examine, simplify, or show a range in a different notation.
-Add a `MajorBound` case to code that examines `VersionRange` constructors.
+`parseVersionRange` accepts the range syntax of all Cabal format versions.
+The package parser applies the rules of the file's Cabal format version.
 
 `resolvePackage` applies explicit flags over flag defaults.
 It evaluates conditions and merges active fields.
 It returns all components, including components with `buildable: False`.
 The caller selects the components to build.
+Condition evaluation compares `os`, `arch`, and compiler names without case.
+Use lower case for the keys of `compilerVersions`.
 
 `BuildInfo` stores partial fields. `Nothing` means that a scalar field is absent.
 `extensions` contains the `default-extensions` values.
 `legacyExtensions` contains the older `extensions` values.
-Condition evaluation keeps both fields.
+`otherExtensions` contains the `other-extensions` values.
+Use `extensions` and `legacyExtensions` when you select compiler extensions.
 
-The `BuildInfo` constructor has a new argument after `extensions`.
-Add `[]` at that position in constructor calls that have no older extensions.
-Set `legacyExtensions` when you create a `BuildInfo` with record syntax.
-Update constructor patterns for the new argument.
-Use both fields when you select compiler extensions.
+`BuildInfo` also has these typed fields:
+`virtualModules`, `otherLanguages`, `mixins`, `asmSources`, `cmmSources`, `jsSources`,
+`includes`, `extraLibDirs`, `extraLibDirsStatic`, `frameworks`, and `extraFrameworkDirs`.
+These fields are not in `extraFields`.
+Use record syntax and `emptyBuildInfo` to make a `BuildInfo` value.
+Positional constructor calls and patterns must add the new fields.
+
+In one section, list fields keep all values, also repeated values.
+For a field with one value, the last value wins, as in Cabal-syntax.
+`sourceDirs` contains the `hs-source-dirs` values and then the older `hs-source-dir` values.
+`buildTools` contains the `build-tools` values and then the `build-tool-depends` values.
+
+`mergeBuildInfo` merges two parts as Cabal-syntax merges build information.
+The parser uses it for common stanza imports.
+Some lists do not keep a value that occurs in both parts.
+Examples are `dependencies`, `sourceDirs`, and `otherModules`.
+Options, `mixins`, `buildTools`, and `exposedModules` keep all values.
+
+A field that the file's Cabal format version does not support is absent.
+For example, before `cabal-version` 2.2, `cxx-sources` is absent.
+Before `cabal-version` 1.10, `default-language` and `default-extensions` are absent.
+Fields that the format version removed cause errors.
 
 Resolution sets an absent `buildable` to `True`.
 Resolution sets an empty source directory list to `["."]`.
@@ -77,51 +121,41 @@ Do not apply defaults before condition evaluation.
 It returns library fields and executable fields separately.
 The caller applies these fields to the build inputs.
 
-## MVP scope
+## Scope
 
-The parser supports these features:
+The parser follows the package parser of Cabal-syntax 3.12.1.0.
+It supports these features:
 
-- UTF-8 input, indentation, complete-line comments, and multiline fields.
-- Trailing spaces in field text.
-- Package name, version, build type, and Cabal format version.
+- UTF-8 input, indentation with spaces or tabs, comments, and multiline fields.
+- Explicit braces for sections and fields.
+- Spaces between a field name and its colon, and line breaks with `\r`.
+- Files without sections. The parser moves their build fields into a library and executables, as Cabal does.
 - Main libraries, named libraries, executables, tests, benchmarks, and foreign libraries.
 - Flags, Boolean conditions, `os`, `arch`, `impl`, and nested `if`/`elif`/`else` sections.
-- Section keywords in upper case or lower case, such as `If` and `if(flag(x))`.
 - Common stanzas and imports from earlier common stanzas.
-- Empty sections, including empty conditional branches.
-- Source repository sections, with their kinds and fields stored as text.
-- Package dependencies, library targets, and modern and legacy build tools.
-- Haskell source fields, language fields, extensions, C and C++ source fields, headers, and compiler options.
-- Quoted paths and options.
-- Custom fields, including `x-aihc-lir-sources`.
-- Version comparisons, intersections, unions, wildcards, major bounds, and version sets.
+- Source repository sections and `custom-setup` sections.
+- Package dependencies, library targets, mixins, and modern and legacy build tools.
+- The rules of each Cabal format version for list separators, version ranges, and fields.
+- The Cabal-syntax rules for repeated fields, unknown fields, and unknown sections.
 
 The parser accepts format versions from 1.0 through 3.14.
-It supports an exact `cabal-version` and the older `>=` form before 2.2.
-This range is an input limit, not a claim of complete format conformance.
+Cabal-syntax 3.12 does not accept format version 3.14.
 
-The MVP has these limits:
+The parser has these limits:
 
-- Build fields outside component sections stay in `packageFields`. The parser does not convert these fields into components.
-- Explicit layout braces and semicolon layout are not supported.
-- Signatures, mixins, and module reexports stay in `extraFields` as text.
+- Cabal-syntax changes 59 known Hackage files before it parses them. This parser does not.
 - Package fields not used by this API stay in `packageFields` as text.
 - Component fields not used by this API stay in `extraFields` as text.
-- The parser does not interpret or keep `custom-setup` section contents.
-- The parser does not validate source repository fields. Nested sections produce errors.
-- The parser does not perform all Cabal package validation or all format-version checks.
-- Repeated `name`, `version`, and `cabal-version` fields produce errors.
-  Other repeated package fields keep all values in source order.
-- Before `cabal-version` 2.2, the parser ignores `elif` sections, as Cabal does.
-- Before `cabal-version` 2.0, the parser accepts `build-tool-depends`, as Cabal does.
-- Syntax diagnostics identify the field or section line. Package checks can report line 1.
+- The parser does not validate these text fields. Cabal-syntax can reject a value that this parser keeps.
+- The parser does not check that each test suite, benchmark, and foreign library has a type.
+- Syntax diagnostics identify the field or section line. Package checks can report line 0.
   Diagnostics do not identify an exact value column.
-- The MVP stops at the first error. `parseWarnings` is reserved and is currently empty.
+- The parser stops at the first error. `parseWarnings` is reserved and is currently empty.
 - Version rendering preserves meaning. It does not preserve the original spelling.
 - No package-file printer or version-range simplifier is provided.
 
 Library targets remain separate from package names.
-Before `cabal-version` 3.4, a dependency on a declared internal library name is converted to a dependency on the current package.
+Before `cabal-version` 3.4, a dependency or mixin on a declared internal library name refers to the current package.
 From `cabal-version` 3.4, a dependency name always identifies a package, as in Cabal.
 The parser retains the internal library target.
 The solver can inspect `Conditional` values before it selects flags.

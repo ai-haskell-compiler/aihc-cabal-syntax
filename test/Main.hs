@@ -146,7 +146,7 @@ testPackage = do
     assert "Public headers" (C.installIncludes cbi) (installIncludes bi)
     assert "Generated headers" (C.autogenIncludes cbi) (autogenIncludes bi)
     assert "Option commas" ["-F", "-pgmFtrhsx", "-optP-DPAIR=1,2"] (ghcOptions bi)
-    assert "Custom fields" (Just ["lir/a.lir lir/b.lir"]) (Map.lookup "x-aihc-lir-sources" (extraFields bi))
+    assert "Custom fields" (Just ["lir/a.lir lir/b.lir"]) (map fieldText <$> Map.lookup "x-aihc-lir-sources" (extraFields bi))
     assert "Dependency names" ["base", "sample", "containers"] (map dependencyPackage (dependencies bi))
     assert "Named dependency" (NamedLibrary "internal" :| []) (dependencyLibraries (dependencies bi !! 1))
     assert "Build tools" ["alex"] (map toolName (buildTools bi))
@@ -268,16 +268,19 @@ testSourceRepositories = do
         ]))
   pkg <- parse input
   assert "Keep repository sections in source order"
-    [ SourceRepository "head" (Map.fromList
+    [ ("head", Map.fromList
         [ ("type", ["git"])
         , ("location", ["https://example.com/first", "https://example.com/second"])
         , ("x-note", ["first\nsecond"])
         ])
-    , SourceRepository "this" (Map.fromList
+    , ("this", Map.fromList
         [("type", ["git"]), ("tag", ["v1.2.3"]), ("subdir", ["\"source files\""])])
-    , SourceRepository "head" (Map.fromList
+    , ("head", Map.fromList
         [("type", ["darcs"]), ("location", ["https://example.com/third"])])
-    ] (packageSourceRepositories pkg)
+    ] [(k, Map.map (map fieldText) fs) | SourceRepository k fs <- packageSourceRepositories pkg]
+  assert "Keep field positions"
+    [Just [FieldValue (Position 8 3) [FieldLine (Position 8 11) "first", FieldLine (Position 9 5) "second"]]]
+    (take 1 [Map.lookup "x-note" fs | SourceRepository _ fs <- packageSourceRepositories pkg])
   empty <- parse (BSC.unlines (map BSC.pack header))
   assert "Absent repositories" [] (packageSourceRepositories empty)
 
@@ -329,10 +332,11 @@ testElif = do
   assert "Select the if branch" [["wasm"]] wasm
   other <- at "windows" "x86_64"
   assert "Select the else branch" [["other"]] other
-  -- Before cabal-version 2.2, Cabal ignores elif and gives a warning.
-  older <- parse "cabal-version: 2.0\nname: sample\nversion: 1\nlibrary\n  if os(osx)\n    cpp-options: -DOSX\n  elif os(linux)\n    cpp-options: -DLINUX\n  else\n    cpp-options: -DOTHER\n"
+  -- Before cabal-version 2.2, Cabal ignores elif and gives a warning. It also
+  -- ignores the else section after it, because no if section comes before it.
+  older <- parse "cabal-version: 2.0\nname: sample\nversion: 1\nbuild-type: Simple\nlibrary\n  if os(osx)\n    cpp-options: -DOSX\n  elif os(linux)\n    cpp-options: -DLINUX\n  else\n    cpp-options: -DOTHER\n"
   [Component _ olderInfo] <- resolve Map.empty older
-  assert "Ignore elif before 2.2" ["-DOTHER"] (cppOptions olderInfo)
+  assert "Ignore elif before 2.2" [] (cppOptions olderInfo)
 
 testImportCommas :: IO ()
 testImportCommas = do
@@ -367,12 +371,15 @@ testRetainedFields :: IO ()
 testRetainedFields = do
   pkg <- parse (BSC.unlines (map BSC.pack (header ++
     [ "library", "  reexported-modules: Data.Other, Data.Alias as Alias"
-    , "  mixins: base hiding (Prelude)", "  signatures: Hole"
+    , "  mixins: base hiding (Prelude), containers (A as B) requires (C)", "  signatures: Hole"
     ])))
   [Component _ bi] <- resolve Map.empty pkg
-  assert "Module reexports" (Just ["Data.Other, Data.Alias as Alias"]) (Map.lookup "reexported-modules" (extraFields bi))
-  assert "Mixins" (Just ["base hiding (Prelude)"]) (Map.lookup "mixins" (extraFields bi))
-  assert "Signatures" (Just ["Hole"]) (Map.lookup "signatures" (extraFields bi))
+  assert "Module reexports" (Just ["Data.Other, Data.Alias as Alias"]) (map fieldText <$> Map.lookup "reexported-modules" (extraFields bi))
+  assert "Mixins"
+    [ Mixin "base" MainLibrary (HidingRenaming ["Prelude"]) DefaultRenaming
+    , Mixin "containers" MainLibrary (ModuleRenaming [("A", "B")]) (ModuleRenaming [("C", "C")]) ]
+    (mixins bi)
+  assert "Signatures" (Just ["Hole"]) (map fieldText <$> Map.lookup "signatures" (extraFields bi))
 
 -- | Before cabal-version 2.0, Cabal keeps build-tool-depends and gives a warning.
 testOlderToolDependencies :: IO ()
@@ -383,44 +390,46 @@ testOlderToolDependencies = do
   library <- maybe (fail "Missing reference library") (pure . C.libBuildInfo . C.condTreeData) (C.condLibrary ref)
   [Component _ bi] <- resolve Map.empty pkg
   assert "Reference keeps the field" 1 (length (C.buildToolDepends library))
-  assert "Keep build-tool-depends" [Just "hspec-discover", Nothing] (map toolPackage (buildTools bi))
+  assert "Keep build-tool-depends after build-tools" [Nothing, Just "hspec-discover"] (map toolPackage (buildTools bi))
 
--- | Cabal accepts repeated package fields with a warning.
+-- | Cabal accepts repeated package fields with a warning. For a field with
+-- one value, the last value wins.
 testRepeatedPackageFields :: IO ()
 testRepeatedPackageFields = do
   pkg <- parse (BSC.unlines (map BSC.pack (header ++
     ["extra-source-files: a.txt", "tested-with: GHC == 9.10", "extra-source-files: b.txt"])))
-  assert "Keep each value in source order" (Just ["a.txt", "b.txt"]) (Map.lookup "extra-source-files" (packageFields pkg))
-  forM_ ["name: other", "version: 2", "cabal-version: 3.0"] $ \field ->
+  assert "Keep each value in source order" (Just ["a.txt", "b.txt"]) (map fieldText <$> Map.lookup "extra-source-files" (packageFields pkg))
+  renamed <- parse (BSC.unlines (map BSC.pack (header ++ ["name: other", "version: 2"])))
+  assert "Last name wins" "other" (packageName renamed)
+  assert "Last version wins" (version "2") (packageVersion renamed)
+  forM_ ["cabal-version: 2.2", "version: 1..2"] $ \field ->
     case parseValue (parsePackage (BSC.unlines (map BSC.pack (header ++ [field])))) of
       Left _ -> pure ()
-      Right _ -> fail ("Repeated field accepted: " ++ field)
+      Right _ -> fail ("Invalid repeated field accepted: " ++ field)
 
 testErrors :: IO ()
 testErrors = do
   forM_
-    [ ["library", "    buildable: True", "  other-modules: Lost"]
-    , ["library", "  build-tools: happy"]
+    [ ["library", "  build-tools: happy"]
     , ["library", "  if flag(missing)", "    buildable: False"]
     , ["library", "  import: missing"]
     , ["library", "  buildable: maybe"]
     , ["library", "  build-depends: base >="]
     , ["library", "  exposed-modules: lower"]
-    , ["library { exposed-modules: Sample }"]
-    , ["library", "\tbuildable: True"]
-    , ["library", "  else", "    buildable: False"]
+    , ["library { exposed-modules: Sample"]
     , ["common a", "  import: a", "library", "  import: a"]
-    , ["library", "  other-modules: Sample", "  import: a"]
     , ["library", "  buildable: True", "library", "  buildable: True"]
     , ["source-repository head", "  if True", "    type: git"]
-    , ["unknown-section"]
-    , ["library", "  else"]
     , ["library", "  if"]
     , ["library", "  if flag(missing)"]
+    , ["library", "  if os(linux) &&", "    buildable: False"]
+    , ["flag bad name"]
+    , ["library", "  build-depends: base:"]
     ] $ \body -> reject (BSC.unlines (map BSC.pack (header ++ body)))
-  reject "name: sample\nversion: 1\n"
+  reject "version: 1\n"
   reject "cabal-version: 99\nname: sample\nversion: 1\n"
-  reject "cabal-version: 0.9\nname: sample\nversion: 1\n"
+  reject "cabal-version: 3.10\nname: sample\nversion: 1\n"
+  reject "name: sample\nversion: 1\ncabal-version: 2.2\n"
   reject (BS.pack [255,254])
   let bad = parsePackage (BSC.unlines (map BSC.pack (header ++ ["library", "  buildable: invalid"])))
   case parseValue bad of

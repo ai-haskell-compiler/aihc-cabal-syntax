@@ -72,10 +72,38 @@ The command returns success when it completes the measurement, even if some stru
 Empty archives and archive errors cause command failure.
 The command refuses to overwrite an existing report directory.
 
+Cabal-syntax changes 59 known Hackage files before it parses them.
+This parser does not change these files. Thus, most of these files do not have equal data.
+
 The Nix check compares the full report with `tests/hackage/baseline.json`.
 It also verifies the total case count and the failure record counts.
 A change in counts causes a check failure.
 Review the failures before you update the baseline.
+
+## Stackage LTS comparison
+
+The Stackage comparison uses the packages of one Stackage LTS snapshot.
+The pinned Nixpkgs revision supplies the list in
+`pkgs/development/haskell-modules/configuration-hackage2nix/stackage.yaml`.
+The list pins one version of each package.
+The test selects the last revision of each package version in the fixed Hackage index.
+It does not download other data.
+
+Run:
+
+```sh
+nix build .#stackage-compliance --no-update-lock-file -o result-stackage
+cat result-stackage/summary.json
+```
+
+The report has the same format as the full comparison.
+`snapshot.json` contains the snapshot name and the number of packages.
+The Nix check compares this data with `tests/hackage/stackage.json`.
+The check fails if a package does not have equal converted data.
+
+If a Nixpkgs update changes the snapshot, update `tests/hackage/stackage.json`.
+The index must contain each package version of the new snapshot.
+If it does not, the build of `.#stackage-corpus` fails. Then update the index as described below.
 
 ## Repeat a failed case
 

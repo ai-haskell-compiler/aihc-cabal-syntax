@@ -9,15 +9,15 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import Aihc.Cabal.Types
-import Aihc.Cabal.Version hiding (versionParser, rangeParser, conditionRangeParser)
+import Aihc.Cabal.Version hiding (Parser, versionParser, versionDigits, rangeParser)
 import Aihc.Cabal.Parser
 
 evaluateCondition :: Environment -> FlagAssignment -> Condition -> Bool
 evaluateCondition env flags cond = case cond of
   Literal b -> b
-  OS x -> x == T.toLower (targetOS env)
-  Arch x -> x == T.toLower (targetArch env)
-  Impl x range -> maybe False (`withinRange` range) (Map.lookup x (compilerVersions env))
+  OS x -> T.toLower x == T.toLower (targetOS env)
+  Arch x -> T.toLower x == T.toLower (targetArch env)
+  Impl x range -> maybe False (`withinRange` range) (Map.lookup (T.toLower x) (compilerVersions env))
   FlagValue x -> Map.findWithDefault False x flags
   Not a -> not (evaluateCondition env flags a)
   And a b -> evaluateCondition env flags a && evaluateCondition env flags b
