@@ -72,8 +72,8 @@ The command returns success when it completes the measurement, even if some stru
 Empty archives and archive errors cause command failure.
 The command refuses to overwrite an existing report directory.
 
-Cabal-syntax changes 59 known Hackage files before it parses them.
-This parser does not change these files. Thus, most of these files do not have equal data.
+Cabal-syntax changes 57 known Hackage files before it parses them.
+This parser applies the same changes to these files and gives a "Legacy cabal file" warning.
 
 The Nix check compares the full report with `tests/hackage/baseline.json`.
 It also verifies the total case count and the failure record counts.
