@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- | Parsers for field values. Each parser follows the Cabal-syntax 3.12
 -- parser for the same value.
@@ -14,7 +15,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Text.Megaparsec (between, choice, eof, errorBundlePretty, many, manyTill, option, runParser, satisfy, some, takeWhile1P, takeWhileP, try)
+import Text.Megaparsec (between, choice, eof, errorBundlePretty, getInput, many, manyTill, option, runParser, satisfy, some, takeP, takeWhile1P, takeWhileP, try)
 import Text.Megaparsec.Char (char, space, spaceChar, string)
 import Aihc.Cabal.Types
 import Aihc.Cabal.Version
@@ -134,10 +135,20 @@ sepEndBy1 p s = do
   x <- p
   (s *> ((x :) <$> sepEndBy p s)) <|> pure [x]
 
+-- | Take the longest prefix that the predicate accepts, if the check accepts
+-- that prefix. Otherwise use the fallback parser. The result is a slice of the
+-- input: a list of characters is not kept.
+validPrefix :: (Char -> Bool) -> (Text -> Bool) -> Parser Text -> Parser Text
+validPrefix allowed valid fallback = do
+  input <- getInput
+  let x = T.takeWhile allowed input
+  if valid x then takeP Nothing (T.length x) else fallback
+
 -- | A package or component name. Each part has a letter.
 componentName :: Parser Text
-componentName = T.pack <$> state0 []
+componentName = validPrefix (\c -> isAlphaNum c || c == '-') valid (T.pack <$> state0 [])
   where
+    valid x = not (T.null x) && all (\part -> not (T.null part) && not (T.all isDigit part)) (T.splitOn "-" x)
     ch = satisfy (\c -> isAlphaNum c || c == '-')
     state0 acc = do
       c <- ch
@@ -149,8 +160,9 @@ componentName = T.pack <$> state0 []
       if isAlphaNum c then state1 (c : acc) else state0 (c : acc)) <|> pure (reverse acc)
 
 moduleName :: Parser Text
-moduleName = T.pack <$> state0 []
+moduleName = validPrefix (\c -> isAlphaNum c || c == '_' || c == '\'' || c == '.') valid (T.pack <$> state0 [])
   where
+    valid x = not (T.null x) && all (\part -> maybe False (isUpper . fst) (T.uncons part)) (T.splitOn "." x)
     state0 acc = do
       c <- satisfy isUpper
       state1 (c : acc)
@@ -197,10 +209,11 @@ dependency spec = do
     ((:| []) <$> library) <|> between (char '{' *> space) (space *> char '}') libraries
   space
   range <- optional (rangeParser spec)
-  let targets = fromMaybe (MainLibrary :| []) libs
-      normalize (NamedLibrary x) | x == name = MainLibrary
+  let normalize (NamedLibrary x) | x == name = MainLibrary
       normalize x = x
-  pure (Dependency name (fromMaybe anyVersion range) (fmap normalize targets))
+      -- Most dependencies have no library list. They share one value.
+      !targets = maybe mainLibrary (fmap normalize) libs
+  pure (Dependency name (fromMaybe anyVersion range) targets)
   where
     unless3 failure = when (not (specAtLeast [3, 0] spec)) failure
     library = NamedLibrary <$> componentName
@@ -208,6 +221,10 @@ dependency spec = do
       x <- library <* space
       xs <- many (comma *> library <* space)
       pure (x :| xs)
+
+mainLibrary :: NonEmpty LibraryTarget
+mainLibrary = MainLibrary :| []
+{-# NOINLINE mainLibrary #-}
 
 exeDependency :: Version -> Parser ToolDependency
 exeDependency spec = do
