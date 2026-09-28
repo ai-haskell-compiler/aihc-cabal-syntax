@@ -2,7 +2,7 @@
 -- | Patches for known Hackage files. Cabal-syntax applies the same patches
 -- before it parses a file. The data comes from
 -- @Distribution.PackageDescription.Quirks@ in Cabal-syntax 3.18.1.0.
-module Aihc.Cabal.Quirks (patchQuirks) where
+module Aihc.Cabal.Internal.Quirks (patchQuirks) where
 
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Unsafe as BSU

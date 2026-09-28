@@ -8,8 +8,16 @@ build-type: Simple
 extra-source-files: README.md test/fixtures/*.cabal
 
 library
-  exposed-modules: Aihc.Cabal Aihc.Cabal.Types Aihc.Cabal.Version
-  other-modules: Aihc.Cabal.Condition Aihc.Cabal.Fields Aihc.Cabal.Parser Aihc.Cabal.Quirks Aihc.Cabal.Values
+  exposed-modules: Aihc.Cabal
+  other-modules:
+    Aihc.Cabal.Internal.Condition
+    Aihc.Cabal.Internal.Lexer
+    Aihc.Cabal.Internal.Parser
+    Aihc.Cabal.Internal.Quirks
+    Aihc.Cabal.Internal.Resolve
+    Aihc.Cabal.Internal.Types
+    Aihc.Cabal.Internal.Values
+    Aihc.Cabal.Internal.Version
   hs-source-dirs: src
   build-depends: base >=4.16 && <5, bytestring, containers, text, megaparsec >=9 && <10, parser-combinators
   default-language: Haskell2010

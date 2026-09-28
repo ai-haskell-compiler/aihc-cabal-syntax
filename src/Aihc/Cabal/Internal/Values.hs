@@ -1,11 +1,11 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
--- | Parsers for field values. Each parser follows the Cabal-syntax 3.12
--- parser for the same value.
-module Aihc.Cabal.Values
+-- | Parsers for field values, and the free text rules. Each parser follows
+-- the Cabal-syntax 3.12 parser for the same value.
+module Aihc.Cabal.Internal.Values
   ( runValue, token, token', filePath, quoted, commaList, spaceList, optionList
   , componentName, moduleName, identifier, languageName, bool, buildTypeValue
-  , dependency, exeDependency, legacyExeDependency, mixin, flagNameValue, specAtLeast
+  , dependency, exeDependency, legacyExeDependency, mixin, flagNameValue, specAtLeast, freeText
   ) where
 
 import Control.Applicative (optional, (<|>))
@@ -17,8 +17,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Megaparsec (between, choice, eof, errorBundlePretty, getInput, many, manyTill, option, runParser, satisfy, some, takeP, takeWhile1P, takeWhileP, try)
 import Text.Megaparsec.Char (char, space, spaceChar, string)
-import Aihc.Cabal.Types
-import Aihc.Cabal.Version
+import Aihc.Cabal.Internal.Types
+import Aihc.Cabal.Internal.Version
 
 specAtLeast :: [Integer] -> Version -> Bool
 specAtLeast digits spec = spec >= specVersion digits
@@ -272,3 +272,27 @@ mixin spec = do
         _ <- some (satisfy isSpace)
         new <- moduleName <* space
         pure (old, new)
+
+-- | Cabal-syntax gives free text with two sets of rules. From cabal-version
+-- 3.0, it keeps blank lines and relative indentation.
+freeText :: Version -> FieldValue -> Text
+freeText spec (FieldValue pos ls) = case ls of
+  [] -> ""
+  _ | specAtLeast [3, 0] spec -> freeText3 pos ls
+  [FieldLine _ "."] -> "."
+  _ -> T.intercalate "\n" [if t == "." then "" else t | FieldLine _ x <- ls, let t = T.strip x]
+
+freeText3 :: Position -> [FieldLine] -> Text
+freeText3 _ [] = ""
+freeText3 _ [FieldLine _ x] = x
+freeText3 pos (FieldLine p1 x1 : rest@(FieldLine p2 _ : _))
+  | positionRow pos == positionRow p1 = T.concat (x1 : lines' (minimum (column p1 : column p2 : map lineColumn rest)))
+  | otherwise =
+      let c = minimum (column p1 : map lineColumn rest)
+      in T.concat (T.replicate (column p1 - c) " " : x1 : lines' c)
+  where
+    column = positionColumn
+    lineColumn = column . fieldLinePosition
+    lines' c = zipWith (line c) (p1 : map fieldLinePosition rest) rest
+    line c previous (FieldLine q x) =
+      T.replicate (positionRow q - positionRow previous) "\n" <> T.replicate (column q - c) " " <> x

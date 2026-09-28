@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Read package descriptions. The rules follow the package parser of
 -- Cabal-syntax 3.18. The parser accepts Cabal format versions up to 3.18.
-module Aihc.Cabal.Parser (parsePackage, parseBuildInfo) where
+module Aihc.Cabal.Internal.Parser (parsePackage, parseHookedBuildInfo) where
 
 import Control.Monad (foldM, guard, unless, when)
 import Data.Bits (shiftL, (.&.), (.|.))
@@ -20,12 +20,12 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Text.Megaparsec (eof, runParser, takeWhile1P, (<|>))
 import Text.Megaparsec.Char (space)
-import Aihc.Cabal.Condition (parseCondition)
-import Aihc.Cabal.Fields (Field (..), SectionArg (..), readFields)
-import Aihc.Cabal.Quirks (patchQuirks)
-import Aihc.Cabal.Types
-import Aihc.Cabal.Values
-import Aihc.Cabal.Version
+import Aihc.Cabal.Internal.Condition (parseCondition)
+import Aihc.Cabal.Internal.Lexer (Field (..), SectionArg (..), readFields)
+import Aihc.Cabal.Internal.Quirks (patchQuirks)
+import Aihc.Cabal.Internal.Types
+import Aihc.Cabal.Internal.Values
+import Aihc.Cabal.Internal.Version
 
 type Result a = Either Diagnostic a
 
@@ -35,13 +35,14 @@ type Fields = Map Text [FieldValue]
 data SectionInfo = SectionInfo Position Text [SectionArg] [Field]
 
 failAt :: Position -> Text -> Result a
-failAt (Position r c) = Left . Diagnostic r c
+failAt p = Left . Diagnostic (Just p)
 
-zeroPosition :: Position
-zeroPosition = Position 0 0
+-- | An error of a check on the complete package. It has no position.
+failPackage :: Text -> Result a
+failPackage = Left . Diagnostic Nothing
 
 report :: Result a -> ParseResult a
-report = ParseResult [] . either (Left . (:| [])) Right
+report = ParseResult []
 
 -- | Decode UTF-8 text. For invalid input, use the Cabal-syntax decoder: it
 -- replaces each invalid sequence with U+FFFD and continues.
@@ -118,30 +119,6 @@ plainFields body = case sections of
   SectionInfo p n _ _ : _ -> failAt p ("invalid subsection " <> T.pack (show n))
   [] -> Right fs
   where (fs, sections) = fmap concat (partitionFields body)
-
--- | Cabal-syntax gives free text with two sets of rules. From cabal-version
--- 3.0, it keeps blank lines and relative indentation.
-freeText :: Version -> FieldValue -> Text
-freeText spec (FieldValue pos ls) = case ls of
-  [] -> ""
-  _ | specAtLeast [3, 0] spec -> freeText3 pos ls
-  [FieldLine _ "."] -> "."
-  _ -> T.intercalate "\n" [if t == "." then "" else t | FieldLine _ x <- ls, let t = T.strip x]
-
-freeText3 :: Position -> [FieldLine] -> Text
-freeText3 _ [] = ""
-freeText3 _ [FieldLine _ x] = x
-freeText3 pos (FieldLine p1 x1 : rest@(FieldLine p2 _ : _))
-  | positionRow pos == positionRow p1 = T.concat (x1 : lines' (minimum (column p1 : column p2 : map lineColumn rest)))
-  | otherwise =
-      let c = minimum (column p1 : map lineColumn rest)
-      in T.concat (T.replicate (column p1 - c) " " : x1 : lines' c)
-  where
-    column = positionColumn
-    lineColumn = column . fieldLinePosition
-    lines' c = zipWith (line c) (p1 : map fieldLinePosition rest) rest
-    line c previous (FieldLine q x) =
-      T.replicate (positionRow q - positionRow previous) "\n" <> T.replicate (column q - c) " " <> x
 
 -- | The Cabal specification version for version digits, or 'Nothing' for an
 -- unknown version.
@@ -422,7 +399,7 @@ data State = State
 parsePackage :: BS.ByteString -> ParseResult Package
 parsePackage input = case patchQuirks input of
   (patched, bytes) -> (report (parsePatched bytes))
-    { parseWarnings = [Diagnostic 0 0 "Legacy cabal file" | patched] }
+    { parseWarnings = [Diagnostic Nothing "Legacy cabal file" | patched] }
 
 parsePatched :: BS.ByteString -> Result Package
 parsePatched bytes = do
@@ -430,7 +407,7 @@ parsePatched bytes = do
   let (top, sections) = takeFields (sectionize fields0)
       get k = Map.findWithDefault [] k top
   spec <- case scanSpecVersion bytes of
-    Just v -> maybe (failAt zeroPosition "Unsupported cabal format version") Right (knownSpec (versionNumbers v))
+    Just v -> maybe (failPackage "Unsupported cabal format version") Right (knownSpec (versionNumbers v))
     Nothing -> case get "cabal-version" of
       [] -> Right (specVersion [1, 0])
       values -> do
@@ -440,7 +417,7 @@ parsePatched bytes = do
         pure v
   parsedSpec <- optionalField (specVersionParser spec) (get "cabal-version")
   unless (fromMaybe (specVersion [1, 0]) parsedSpec == spec)
-    (failAt zeroPosition "Scanned and parsed cabal-versions don't match")
+    (failPackage "Scanned and parsed cabal-versions don't match")
   pkg <- required "name" componentName top
   version <- required "version" versionParser top
   rawBuildType <- optionalField (buildTypeValue spec) (get "build-type")
@@ -448,11 +425,11 @@ parsePatched bytes = do
   let bt = fromMaybe (if specAtLeast [2, 2] spec && not (isJust setup) then "Simple" else "Custom") rawBuildType
       knownFlags = map flagName flags
   when (bt == "Custom" && not (isJust setup) && specAtLeast [1, 24] spec)
-    (failAt zeroPosition "Since cabal-version: 1.24 specifying custom-setup section is mandatory")
+    (failPackage "Since cabal-version: 1.24 specifying custom-setup section is mandatory")
   when (bt == "Hooks" && not (isJust setup))
-    (failAt zeroPosition "Packages with build-type: Hooks require a custom-setup stanza")
+    (failPackage "Packages with build-type: Hooks require a custom-setup stanza")
   mapM_ (checkFlags knownFlags . componentData) components
-  let libraries = [x | not (specAtLeast [3, 4] spec), Component (Library (Just x)) _ <- components]
+  let libraries = [x | not (specAtLeast [3, 4] spec), Component (Library (NamedLibrary x)) _ <- components]
       internal = internalDependencies pkg libraries
       internalMixin m
         | mixinPackage m `elem` libraries, mixinLibrary m == MainLibrary =
@@ -471,7 +448,7 @@ parsePatched bytes = do
 required :: Text -> Parser a -> Fields -> Result a
 required key p fields = do
   value <- singular (parseField p) (Map.findWithDefault [] key fields)
-  maybe (failAt zeroPosition (T.pack (show key) <> " field missing")) Right value
+  maybe (failPackage (T.pack (show key) <> " field missing")) Right value
 
 section :: Version -> State -> Field -> Result State
 section _ st Field {} = Right st
@@ -487,8 +464,8 @@ section spec st (Section p name args body) = case name of
     | null args -> do
         when (any isMainLibrary (stateComponents st))
           (failAt p "Multiple main libraries; have you forgotten to specify a name for an internal library?")
-        component (Library Nothing) LibraryKind
-    | otherwise -> sectionName p args >>= \n -> component (Library (Just n)) LibraryKind
+        component (Library MainLibrary) LibraryKind
+    | otherwise -> sectionName p args >>= \n -> component (Library (NamedLibrary n)) LibraryKind
   "foreign-library" -> sectionName p args >>= \n -> component (ForeignLibrary n) ForeignKind
   "executable" -> sectionName p args >>= \n -> component (Executable n) ExecutableKind
   "test-suite" -> sectionName p args >>= \n -> component (TestSuite n) TestKind
@@ -519,7 +496,7 @@ section spec st (Section p name args body) = case name of
     component kind grammar = do
       tree <- stanza spec grammar commons body
       Right st {stateComponents = stateComponents st ++ [Component kind tree]}
-    isMainLibrary (Component (Library Nothing) _) = True
+    isMainLibrary (Component (Library MainLibrary) _) = True
     isMainLibrary _ = False
     nonEmpty [] = Nothing
     nonEmpty xs = Just xs
@@ -543,22 +520,22 @@ checkFlags known tree = mapM_ check (branches tree)
   where
     check (Branch c t e) = checkCondition c *> checkFlags known t *> mapM_ (checkFlags known) e
     checkCondition c = case c of
-      FlagValue f | f `notElem` known -> failAt zeroPosition ("These flags are used without having been defined: " <> f)
+      FlagValue f | f `notElem` known -> failPackage ("These flags are used without having been defined: " <> f)
       Not a -> checkCondition a
       And a b -> checkCondition a *> checkCondition b
       Or a b -> checkCondition a *> checkCondition b
       _ -> Right ()
 
 -- | Read a @.buildinfo@ file, as Cabal-syntax reads hooked build information.
-parseBuildInfo :: BS.ByteString -> ParseResult BuildInfoFile
-parseBuildInfo bytes = report $ do
+parseHookedBuildInfo :: BS.ByteString -> ParseResult HookedBuildInfo
+parseHookedBuildInfo bytes = report $ do
   fields <- readInput bytes
   let (header, rest) = break isExecutable fields
   libraryFields <- plainFields header
   lib <- if Map.null libraryFields then pure Nothing else Just <$> buildInfoFields latestSpec CommonKind libraryFields
   exes <- groups rest
   ensureUnique (map fst exes)
-  pure (BuildInfoFile lib (Map.fromList exes))
+  pure (HookedBuildInfo lib (Map.fromList exes))
   where
     isExecutable (Field _ "executable" _) = True
     isExecutable _ = False
@@ -570,5 +547,5 @@ parseBuildInfo bytes = report $ do
       ((exe, bi) :) <$> groups after
     groups _ = Right []
     ensureUnique names = case [n | (i, n) <- zip [0 :: Int ..] names, n `elem` take i names] of
-      n : _ -> failAt zeroPosition ("Duplicate executable: " <> n)
+      n : _ -> failPackage ("Duplicate executable: " <> n)
       [] -> Right ()

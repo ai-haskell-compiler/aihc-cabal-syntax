@@ -145,11 +145,11 @@ testCompliance = do
   let oldSpelling = pkg { A.packageFields = Map.insert "version" [value "1.00"] (A.packageFields pkg) }
   assert "Convert typed versions without reading the old spelling" (fst (comparePackage oldSpelling ref) == Match)
   let changedModule = pkg { A.packageComponents =
-        [A.Component (A.Library Nothing) (A.Conditional
+        [A.Component (A.Library A.MainLibrary) (A.Conditional
           (A.emptyBuildInfo { A.exposedModules = ["Changed"] }) [])] }
   assert "Compare component fields" (fst (comparePackage changedModule ref) == Mismatch)
   let invalid = pkg { A.packageComponents =
-        [A.Component (A.Library Nothing) (A.Conditional
+        [A.Component (A.Library A.MainLibrary) (A.Conditional
           (A.emptyBuildInfo { A.defaultLanguage = Just "invalid language" }) [])] }
   assert "Count conversion errors" (fst (comparePackage invalid ref) == ConversionError)
   let metadata = pkg { A.packageFields = Map.insert "synopsis" [value "Changed"] (A.packageFields pkg) }
