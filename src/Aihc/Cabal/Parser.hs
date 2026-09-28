@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- | Read package descriptions. The rules follow the package parser of
 -- Cabal-syntax 3.18. The parser accepts Cabal format versions up to 3.18.
@@ -21,6 +22,7 @@ import Text.Megaparsec (eof, runParser, takeWhile1P, (<|>))
 import Text.Megaparsec.Char (space)
 import Aihc.Cabal.Condition (parseCondition)
 import Aihc.Cabal.Fields (Field (..), SectionArg (..), readFields)
+import Aihc.Cabal.Quirks (patchQuirks)
 import Aihc.Cabal.Types
 import Aihc.Cabal.Values
 import Aihc.Cabal.Version
@@ -356,6 +358,8 @@ buildInfoFields spec kind fs = do
   cc <- options (get "cc-options")
   cxxOpts <- options (since [2, 2] "cxx-options")
   ghc <- options (get "ghc-options")
+  -- Evaluate the other fields now. Then the parsed field lines are not kept.
+  let !rest = Map.filterWithKey keep fs
   pure BuildInfo
     { buildable = buildable', sourceDirs = map T.unpack (dirs ++ oldDirs), exposedModules = exposed
     , otherModules = other, autogenModules = autogen, virtualModules = virtual
@@ -383,7 +387,6 @@ buildInfoFields spec kind fs = do
     options = monoidal (optionList token')
     typed = typedFields ++ ["exposed-modules" | kind == LibraryKind]
       ++ ["main-is" | kind `elem` [ExecutableKind, TestKind, BenchmarkKind]]
-    rest = Map.filterWithKey keep fs
     keep k _
       | k `elem` typed = False
       | kind == CommonKind = k `elem` buildInfoFieldNames || "x-" `T.isPrefixOf` k
@@ -414,8 +417,15 @@ data State = State
   , stateSetup :: Maybe [Dependency]
   }
 
+-- | Parse a package description. First apply the Cabal-syntax patches for
+-- known Hackage files. A patched file gets a warning, as in Cabal-syntax.
 parsePackage :: BS.ByteString -> ParseResult Package
-parsePackage bytes = report $ do
+parsePackage input = case patchQuirks input of
+  (patched, bytes) -> (report (parsePatched bytes))
+    { parseWarnings = [Diagnostic 0 0 "Legacy cabal file" | patched] }
+
+parsePatched :: BS.ByteString -> Result Package
+parsePatched bytes = do
   fields0 <- readInput bytes
   let (top, sections) = takeFields (sectionize fields0)
       get k = Map.findWithDefault [] k top

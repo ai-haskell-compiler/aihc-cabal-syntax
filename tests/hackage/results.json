@@ -1,15 +1,15 @@
 {
   "outcomes": {
     "both_rejected": 0,
-    "conversion_error": 2,
+    "conversion_error": 0,
     "exception": 0,
-    "match": 200585,
-    "mismatch": 1,
-    "parser_error": 54,
+    "match": 200642,
+    "mismatch": 0,
+    "parser_error": 0,
     "reference_error": 0
   },
-  "parser_accepted": 200588,
-  "parser_with_warnings": 0,
+  "parser_accepted": 200642,
+  "parser_with_warnings": 57,
   "reference": "Cabal-syntax",
   "reference_accepted": 200642,
   "reference_version": "3.18.1.0",
