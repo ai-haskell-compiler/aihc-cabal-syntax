@@ -6,6 +6,8 @@ import Control.Exception (evaluate)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (isSuffixOf)
+import qualified Distribution.Fields.ParseResult as Cabal
+import qualified Distribution.PackageDescription as Cabal
 import qualified Distribution.PackageDescription.Parsec as Cabal
 import System.Environment (getArgs)
 import System.IO (IOMode (ReadMode), withBinaryFile)
@@ -29,7 +31,9 @@ parse "aihc" bytes = do
   _ <- evaluate (length (show result))
   pure (either (const 0) (const 1) (parseValue result))
 parse _ bytes = do
-  let result = Cabal.runParseResult (Cabal.parseGenericPackageDescription bytes)
+  let reference :: Cabal.ParseResult () Cabal.GenericPackageDescription
+      reference = Cabal.parseGenericPackageDescription bytes
+      result = Cabal.runParseResult reference
   _ <- evaluate (length (show result))
   pure (either (const 0) (const 1) (snd result))
 

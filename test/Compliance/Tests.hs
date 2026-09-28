@@ -7,7 +7,7 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Aihc.Cabal as A
-import Compliance.Adapter (toCabal)
+import Compliance.Adapter (runResult, toCabal)
 import Compliance.Compare
 import qualified Distribution.PackageDescription.Parsec as C
 
@@ -103,7 +103,7 @@ testCompliance = do
   let extensionBytes = "cabal-version: 2.2\nname: sample\nversion: 1\nbuild-type: Simple\ncommon shared\n  extensions: CPP\nlibrary\n  import: shared\n  default-extensions: OverloadedStrings\n"
   extensionPackage <- either (fail . show) pure (A.parseValue (A.parsePackage extensionBytes))
   extensionReference <- either (fail . show) pure
-    (snd (C.runParseResult (C.parseGenericPackageDescription extensionBytes)))
+    (snd (runResult (C.parseGenericPackageDescription extensionBytes)))
   assert "Convert imported older extensions"
     (fst (comparePackage extensionPackage extensionReference) == Match)
   let changedExtensions = extensionPackage { A.packageComponents =
@@ -132,14 +132,14 @@ testCompliance = do
       assert ("Expected equal structures for an older format: " ++ show result ++ "\n" ++ BSC.unpack bytes) (outcome result == Match)
   let setupBytes = header <> "build-type: Custom\ncustom-setup\n  setup-depends: base, Cabal\nlibrary\n  buildable: True\n"
   setupPackage <- either (fail . show) pure (A.parseValue (A.parsePackage setupBytes))
-  setupReference <- either (fail . show) pure (snd (C.runParseResult (C.parseGenericPackageDescription setupBytes)))
+  setupReference <- either (fail . show) pure (snd (runResult (C.parseGenericPackageDescription setupBytes)))
   assert "Lost data must fail equality"
     (fst (comparePackage setupPackage { A.packageSetupDependencies = Nothing } setupReference) == Mismatch)
   assert "Both parsers reject invalid input" (outcome (compareBytes "not a package") == BothRejected)
   assert "Count a reference parse error" (outcome (compareBytes (header <> "test-suite bad\n  type: exitcode-stdio-1.0\n")) == ReferenceError)
   let bytes = header <> "library\n  exposed-modules: Sample\n"
   pkg <- either (fail . show) pure (A.parseValue (A.parsePackage bytes))
-  ref <- either (fail . show) pure (snd (C.runParseResult (C.parseGenericPackageDescription bytes)))
+  ref <- either (fail . show) pure (snd (runResult (C.parseGenericPackageDescription bytes)))
   let changed = pkg { A.packageName = "changed" }
   assert "Use the typed AST instead of the original name field" (fst (comparePackage changed ref) == Mismatch)
   let oldSpelling = pkg { A.packageFields = Map.insert "version" [value "1.00"] (A.packageFields pkg) }
@@ -157,7 +157,7 @@ testCompliance = do
   let repositoryBytes = header <> "source-repository head\n  type: git\n  location: https://example.com/sample\n"
   repositoryPackage <- either (fail . show) pure (A.parseValue (A.parsePackage repositoryBytes))
   repositoryReference <- either (fail . show) pure
-    (snd (C.runParseResult (C.parseGenericPackageDescription repositoryBytes)))
+    (snd (runResult (C.parseGenericPackageDescription repositoryBytes)))
   let changedRepository = repositoryPackage { A.packageSourceRepositories =
         [A.SourceRepository "this" (Map.fromList [("type", [value "git"]), ("tag", [value "v1.0"])])] }
   assert "Compare repository data"
@@ -171,7 +171,7 @@ testCompliance = do
     let flagBytes = "cabal-version: " <> spec <> "\nname: sample\nversion: 1\nbuild-type: Simple\nflag fast\n  description: First line\n    second line\n    .\n    Last line\n  default: False\n  manual: True\n"
     flagPackage <- either (fail . show) pure (A.parseValue (A.parsePackage flagBytes))
     flagReference <- either (fail . show) pure
-      (snd (C.runParseResult (C.parseGenericPackageDescription flagBytes)))
+      (snd (runResult (C.parseGenericPackageDescription flagBytes)))
     let expected = if spec == "3.0" then "First line\nsecond line\n.\nLast line" else "First line\nsecond line\n\nLast line"
     assert "Keep flag description text"
       (A.packageFlags flagPackage == [A.Flag "fast" False True expected])

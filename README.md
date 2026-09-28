@@ -8,13 +8,13 @@ It uses Megaparsec. It does not solve dependencies or build packages.
 ## Hackage results
 
 The fixed Hackage index contains **200,642 file revisions**.
-The reference parser is **Cabal-syntax 3.12.1.0**.
+The reference parser is **Cabal-syntax 3.18.1.0**.
 
 | Result | Files | All files |
 | --- | ---: | ---: |
 | aihc-cabal-syntax accepts | 200,584 | 99.97% |
-| Cabal-syntax accepts | 200,615 | 99.99% |
-| Equal converted data | 200,558 | 99.96% |
+| Cabal-syntax accepts | 200,642 | 100.00% |
+| Equal converted data | 200,581 | 99.97% |
 
 An accepted file does not prove full compliance.
 The equality test compares complete `GenericPackageDescription` values after conversion of our AST.
@@ -40,8 +40,8 @@ Each parser reads all **200,642 revisions** in a separate process on the same ma
 
 | Measurement | aihc-cabal-syntax | Cabal-syntax | aihc / Cabal-syntax |
 | --- | ---: | ---: | ---: |
-| Elapsed time | 48.34 s | 115.76 s | 0.42× |
-| Peak process memory (RSS) | 29.91 MiB | 38.48 MiB | 0.78× |
+| Elapsed time | 50.78 s | 120.62 s | 0.42× |
+| Peak process memory (RSS) | 30.38 MiB | 37.64 MiB | 0.81× |
 
 A ratio below 1 means less time or memory than Cabal-syntax.
 Measured on `aarch64-darwin` with GHC 9.10.3, `-O2`, and one RTS capability.

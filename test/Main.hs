@@ -11,6 +11,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Aihc.Cabal
+import qualified Distribution.Fields.ParseResult as C
 import qualified Distribution.PackageDescription as C
 import qualified Distribution.PackageDescription.Parsec as C
 import qualified Distribution.Parsec as C
@@ -25,6 +26,13 @@ assert label expected actual = unless (expected == actual)
 
 right :: Show e => Either e a -> IO a
 right = either (fail . show) pure
+
+-- | Run a Cabal-syntax parser without a source name. The results keep the
+-- error and warning format of Cabal-syntax 3.12.
+runResult :: C.ParseResult () a
+  -> ([C.PWarning], Either (Maybe C.Version, NonEmpty C.PError) a)
+runResult result = case C.runParseResult result of
+  (warnings, outcome) -> (map C.pwarning warnings, either (Left . fmap (fmap C.perror)) Right outcome)
 
 parse :: BSC.ByteString -> IO Package
 parse = right . parseValue . parsePackage
@@ -120,7 +128,7 @@ testVersions = do
 testPackage :: IO ()
 testPackage = do
   pkg <- parse fixture
-  ref <- right (snd (C.runParseResult (C.parseGenericPackageDescription fixture)))
+  ref <- right (snd (runResult (C.parseGenericPackageDescription fixture)))
   assert "Package name" "sample" (packageName pkg)
   assert "Component count" 6 (length (packageComponents pkg))
   assert "Flag declarations" [Flag "fast" True False ""] (packageFlags pkg)
@@ -138,13 +146,13 @@ testPackage = do
     assert "Language" (T.pack . C.prettyShow <$> C.defaultLanguage cbi) (defaultLanguage bi)
     assert "Extensions" (map (T.pack . C.prettyShow) (C.defaultExtensions cbi)) (extensions bi)
     assert "CPP options" (map T.pack (C.cppOptions cbi)) (cppOptions bi)
-    assert "C sources" (C.cSources cbi) (cSources bi)
-    assert "C++ sources" (C.cxxSources cbi) (cxxSources bi)
+    assert "C sources" (map C.getSymbolicPath (C.cSources cbi)) (cSources bi)
+    assert "C++ sources" (map C.getSymbolicPath (C.cxxSources cbi)) (cxxSources bi)
     assert "C options" (map T.pack (C.ccOptions cbi)) (ccOptions bi)
     assert "C++ options" (map T.pack (C.cxxOptions cbi)) (cxxOptions bi)
-    assert "Include directories" (C.includeDirs cbi) (includeDirs bi)
-    assert "Public headers" (C.installIncludes cbi) (installIncludes bi)
-    assert "Generated headers" (C.autogenIncludes cbi) (autogenIncludes bi)
+    assert "Include directories" (map C.getSymbolicPath (C.includeDirs cbi)) (includeDirs bi)
+    assert "Public headers" (map C.getSymbolicPath (C.installIncludes cbi)) (installIncludes bi)
+    assert "Generated headers" (map C.getSymbolicPath (C.autogenIncludes cbi)) (autogenIncludes bi)
     assert "Option commas" ["-F", "-pgmFtrhsx", "-optP-DPAIR=1,2"] (ghcOptions bi)
     assert "Custom fields" (Just ["lir/a.lir lir/b.lir"]) (map fieldText <$> Map.lookup "x-aihc-lir-sources" (extraFields bi))
     assert "Dependency names" ["base", "sample", "containers"] (map dependencyPackage (dependencies bi))
@@ -155,7 +163,7 @@ testPackage = do
     assert "Legacy internal dependency" ["sample"] (map dependencyPackage (dependencies exe))
     assert "Legacy internal target" [NamedLibrary "internal" :| []] (map dependencyLibraries (dependencies exe))
   where
-    collect fast (C.CondNode a _ bs) = a : concatMap branch bs
+    collect fast (C.CondNode a bs) = a : concatMap branch bs
       where
         branch (C.CondBranch c t e) = if eval c then collect fast t else maybe [] (collect fast) e
         eval c = case c of
@@ -172,7 +180,7 @@ testConsumers :: IO ()
 testConsumers = forM_ ["aihc-hackage", "aihc-package-plan", "aihc-haddock"] $ \pkgName -> do
   input <- BSC.readFile ("test/fixtures/" ++ pkgName ++ ".cabal")
   pkg <- parse input
-  ref <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
+  ref <- right (snd (runResult (C.parseGenericPackageDescription input)))
   components <- resolve Map.empty pkg
   assert "Consumer package name" (T.pack pkgName) (packageName pkg)
   bi <- case components of
@@ -235,7 +243,7 @@ testLegacy = do
       (map (exposedModules . unconditional . componentData) (packageComponents older))
   let input = "cabal-version: >=1.10\nname: legacy\nversion: 1\nlibrary\n  extensions: CPP\n  build-tools: happy >=1.20\n"
   pkg <- parse input
-  _ <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
+  _ <- right (snd (runResult (C.parseGenericPackageDescription input)))
   [Component _ bi] <- resolve Map.empty pkg
   assert "Legacy extensions" ["CPP"] (legacyExtensions bi)
   assert "Default extension field" [] (extensions bi)
@@ -249,7 +257,7 @@ testLegacy = do
   let setInput = BSC.unlines (map BSC.pack (header ++
         ["library", "  build-depends: , base:{base} >=4, sample:{one,two} ^>={1.2,2.3}"]))
   sets <- parse setInput
-  _ <- right (snd (C.runParseResult (C.parseGenericPackageDescription setInput)))
+  _ <- right (snd (runResult (C.parseGenericPackageDescription setInput)))
   [Component _ setInfo] <- resolve Map.empty sets
   assert "Main library target" (MainLibrary :| []) (dependencyLibraries (dependencies setInfo !! 0))
   assert "Library target set" (NamedLibrary "one" :| [NamedLibrary "two"])
@@ -288,7 +296,7 @@ testBuildInfo :: IO ()
 testBuildInfo = do
   let input = "cc-options: -DHOOKED\ncpp-options: -DHOOKED_HS\ninclude-dirs: generated\nc-sources: generated.c\nexecutable: sample-tool\ncpp-options: -DEXE\n"
   ours <- right (parseValue (parseBuildInfo input))
-  (lib, exes) <- right (snd (C.runParseResult (C.parseHookedBuildInfo input)))
+  (lib, exes) <- right (snd (runResult (C.parseHookedBuildInfo input)))
   assert "Buildinfo C options" (map T.pack . C.ccOptions <$> lib) (ccOptions <$> libraryBuildInfo ours)
   assert "Buildinfo executable count" (length exes) (Map.size (executableBuildInfo ours))
   assert "Buildinfo executable options" (Just ["-DEXE"]) (cppOptions <$> Map.lookup "sample-tool" (executableBuildInfo ours))
@@ -320,7 +328,7 @@ testElif = do
         , "  else", "    hs-source-dirs: other"
         ]))
   pkg <- parse input
-  _ <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
+  _ <- right (snd (runResult (C.parseGenericPackageDescription input)))
   [Component _ bi] <- resolve Map.empty pkg
   assert "Select an elif branch" ["linux"] (sourceDirs bi)
   let at os arch = do
@@ -345,7 +353,7 @@ testImportCommas = do
         , "library", "  import:", "    , one", "    , two"
         ]))
   pkg <- parse input
-  _ <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
+  _ <- right (snd (runResult (C.parseGenericPackageDescription input)))
   [Component _ bi] <- resolve Map.empty pkg
   assert "Import list with leading commas" ["-DONE", "-DTWO"] (cppOptions bi)
 
@@ -358,7 +366,7 @@ testInternalLibraryNames = forM_ [("3.0", ("sample", NamedLibrary "mtl")), ("3.4
         , "library", "  build-depends: mtl", "library mtl", "  build-depends: base"
         ])
   pkg <- parse input
-  ref <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
+  ref <- right (snd (runResult (C.parseGenericPackageDescription input)))
   library <- maybe (fail "Missing reference library") (pure . C.libBuildInfo . C.condTreeData) (C.condLibrary ref)
   (Component _ bi : _) <- resolve Map.empty pkg
   assert ("Dependency name for " ++ spec) [expected]
@@ -386,7 +394,7 @@ testOlderToolDependencies :: IO ()
 testOlderToolDependencies = do
   let input = "cabal-version: >=1.10\nname: sample\nversion: 1\nlibrary\n  build-tool-depends: hspec-discover:hspec-discover\n  build-tools: happy\n"
   pkg <- parse input
-  ref <- right (snd (C.runParseResult (C.parseGenericPackageDescription input)))
+  ref <- right (snd (runResult (C.parseGenericPackageDescription input)))
   library <- maybe (fail "Missing reference library") (pure . C.libBuildInfo . C.condTreeData) (C.condLibrary ref)
   [Component _ bi] <- resolve Map.empty pkg
   assert "Reference keeps the field" 1 (length (C.buildToolDepends library))
