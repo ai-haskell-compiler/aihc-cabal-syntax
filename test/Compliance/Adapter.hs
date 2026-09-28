@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Compliance.Adapter (toCabal) where
+module Compliance.Adapter (toCabal, runResult) where
 
 import Control.Monad (foldM)
+import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
@@ -63,7 +64,7 @@ sourceRepository spec repository = do
 
 fields :: C.CabalSpecVersion -> C.ParsecFieldGrammar s a -> Map.Map Text [A.FieldValue] -> Either String a
 fields spec grammar retained = either (Left . show) Right
-  (snd (C.runParseResult (C.parseFieldGrammar spec (fieldMap retained) grammar)))
+  (snd (runResult (C.parseFieldGrammar spec (fieldMap retained) grammar)))
   where
     -- Keep each occurrence, each line, and each source position.
     fieldMap = Map.fromList . map (\(k, vs) -> (TE.encodeUtf8 k, map value vs)) . Map.toList
@@ -71,11 +72,22 @@ fields spec grammar retained = either (Left . show) Right
       [C.FieldLine (position q) (TE.encodeUtf8 line) | A.FieldLine q line <- ls]
     position (A.Position row column) = C.Position row column
 
+-- | Run a Cabal-syntax parser without a source name. The results keep the
+-- error and warning format of Cabal-syntax 3.12.
+runResult :: C.ParseResult () a
+  -> ([C.PWarning], Either (Maybe C.Version, NonEmpty C.PError) a)
+runResult result = case C.runParseResult result of
+  (warnings, outcome) -> (map C.pwarning warnings, either (Left . fmap (fmap C.perror)) Right outcome)
+
 -- | A field value for text that has no source position. Each line gets a
 -- new row, so that Cabal free text rules give the same text.
 text :: Text -> A.FieldValue
 text value = A.FieldValue (A.Position 0 0)
   [A.FieldLine (A.Position row 1) line | not (T.null value), (row, line) <- zip [1 ..] (T.splitOn "\n" value)]
+
+-- | Cabal-syntax makes these paths without checks or normalization.
+path :: FilePath -> C.SymbolicPathX allowAbsolute from to
+path = C.unsafeMakeSymbolicPath
 
 atom :: C.Parsec a => Text -> Either String a
 atom input = maybe (Left ("Cannot convert field value: " ++ T.unpack input)) Right (C.simpleParsec (T.unpack input))
@@ -137,7 +149,7 @@ convertBuildInfo raw bi = do
   let C.PerCompilerFlavor _ ghcjs = C.options raw
   pure raw
     { C.buildable = fromMaybe True (A.buildable bi)
-    , C.hsSourceDirs = map C.unsafeMakeSymbolicPath (A.sourceDirs bi)
+    , C.hsSourceDirs = map path (A.sourceDirs bi)
     , C.otherModules = other
     , C.autogenModules = autogen
     , C.virtualModules = virtual
@@ -150,19 +162,19 @@ convertBuildInfo raw bi = do
     , C.mixins = mixins
     , C.buildTools = legacy
     , C.buildToolDepends = modern
-    , C.cSources = A.cSources bi
-    , C.cxxSources = A.cxxSources bi
-    , C.asmSources = A.asmSources bi
-    , C.cmmSources = A.cmmSources bi
-    , C.jsSources = A.jsSources bi
-    , C.includeDirs = A.includeDirs bi
-    , C.includes = A.includes bi
-    , C.installIncludes = A.installIncludes bi
-    , C.autogenIncludes = A.autogenIncludes bi
-    , C.extraLibDirs = A.extraLibDirs bi
-    , C.extraLibDirsStatic = A.extraLibDirsStatic bi
-    , C.frameworks = map T.unpack (A.frameworks bi)
-    , C.extraFrameworkDirs = A.extraFrameworkDirs bi
+    , C.cSources = map path (A.cSources bi)
+    , C.cxxSources = map path (A.cxxSources bi)
+    , C.asmSources = map path (A.asmSources bi)
+    , C.cmmSources = map path (A.cmmSources bi)
+    , C.jsSources = map path (A.jsSources bi)
+    , C.includeDirs = map path (A.includeDirs bi)
+    , C.includes = map path (A.includes bi)
+    , C.installIncludes = map path (A.installIncludes bi)
+    , C.autogenIncludes = map path (A.autogenIncludes bi)
+    , C.extraLibDirs = map path (A.extraLibDirs bi)
+    , C.extraLibDirsStatic = map path (A.extraLibDirsStatic bi)
+    , C.frameworks = map (path . T.unpack) (A.frameworks bi)
+    , C.extraFrameworkDirs = map path (A.extraFrameworkDirs bi)
     , C.cppOptions = map T.unpack (A.cppOptions bi)
     , C.ccOptions = map T.unpack (A.ccOptions bi)
     , C.cxxOptions = map T.unpack (A.cxxOptions bi)
@@ -186,36 +198,36 @@ convertCondition cond = case cond of
   A.And a b -> C.CAnd <$> convertCondition a <*> convertCondition b
   A.Or a b -> C.COr <$> convertCondition a <*> convertCondition b
 
-convertTree :: (A.BuildInfo -> Either String a) -> (a -> C.BuildInfo)
-  -> A.Conditional A.BuildInfo -> Either String (C.CondTree C.ConfVar [C.Dependency] a)
-convertTree convert getInfo (A.Conditional bi branches) = do
+convertTree :: (A.BuildInfo -> Either String a)
+  -> A.Conditional A.BuildInfo -> Either String (C.CondTree C.ConfVar a)
+convertTree convert (A.Conditional bi branches) = do
   value <- convert bi
   children <- traverse branch branches
-  pure (C.CondNode value (C.targetBuildDepends (getInfo value)) children)
+  pure (C.CondNode value children)
   where
     branch (A.Branch cond yes no) = C.CondBranch <$> convertCondition cond
-      <*> convertTree convert getInfo yes <*> traverse (convertTree convert getInfo) no
+      <*> convertTree convert yes <*> traverse (convertTree convert) no
 
 component :: C.CabalSpecVersion -> C.GenericPackageDescription
   -> A.Component (A.Conditional A.BuildInfo) -> Either String C.GenericPackageDescription
 component spec gpd (A.Component kind tree) = case kind of
   A.Library name -> do
     let libName = maybe C.LMainLibName (C.LSubLibName . componentName) name
-    converted <- convertTree (library libName) C.libBuildInfo tree
+    converted <- convertTree (library libName) tree
     pure $ case name of
       Nothing -> gpd { C.condLibrary = Just converted }
       Just n -> gpd { C.condSubLibraries = C.condSubLibraries gpd ++ [(componentName n, converted)] }
   A.Executable name -> do
-    converted <- convertTree (executable (componentName name)) C.buildInfo tree
+    converted <- convertTree (executable (componentName name)) tree
     pure gpd { C.condExecutables = C.condExecutables gpd ++ [(componentName name, converted)] }
   A.ForeignLibrary name -> do
-    converted <- convertTree (foreignLibrary (componentName name)) C.foreignLibBuildInfo tree
+    converted <- convertTree (foreignLibrary (componentName name)) tree
     pure gpd { C.condForeignLibs = C.condForeignLibs gpd ++ [(componentName name, converted)] }
   A.TestSuite name -> do
-    converted <- convertTree testSuite C.testBuildInfo tree
+    converted <- convertTree testSuite tree
     pure gpd { C.condTestSuites = C.condTestSuites gpd ++ [(componentName name, converted)] }
   A.Benchmark name -> do
-    converted <- convertTree benchmark C.benchmarkBuildInfo tree
+    converted <- convertTree benchmark tree
     pure gpd { C.condBenchmarks = C.condBenchmarks gpd ++ [(componentName name, converted)] }
   where
     componentName = C.mkUnqualComponentName . T.unpack
@@ -227,7 +239,7 @@ component spec gpd (A.Component kind tree) = case kind of
     executable name bi = do
       raw <- fields spec (C.executableFieldGrammar name) (A.extraFields bi)
       info <- convertBuildInfo (C.buildInfo raw) bi
-      pure raw { C.buildInfo = info, C.modulePath = fromMaybe "" (A.mainIs bi) }
+      pure raw { C.buildInfo = info, C.modulePath = path (fromMaybe "" (A.mainIs bi)) }
     foreignLibrary name bi = do
       raw <- fields spec (C.foreignLibFieldGrammar name) (A.extraFields bi)
       info <- convertBuildInfo (C.foreignLibBuildInfo raw) bi
@@ -236,10 +248,10 @@ component spec gpd (A.Component kind tree) = case kind of
       raw <- fields spec C.testSuiteFieldGrammar (A.extraFields bi)
       info <- convertBuildInfo (C._testStanzaBuildInfo raw) bi
       result (C.validateTestSuite spec C.zeroPos raw
-        { C._testStanzaBuildInfo = info, C._testStanzaMainIs = A.mainIs bi })
+        { C._testStanzaBuildInfo = info, C._testStanzaMainIs = path <$> A.mainIs bi })
     benchmark bi = do
       raw <- fields spec C.benchmarkFieldGrammar (A.extraFields bi)
       info <- convertBuildInfo (C._benchmarkStanzaBuildInfo raw) bi
       result (C.validateBenchmark spec C.zeroPos raw
-        { C._benchmarkStanzaBuildInfo = info, C._benchmarkStanzaMainIs = A.mainIs bi })
-    result = either (Left . show) Right . snd . C.runParseResult
+        { C._benchmarkStanzaBuildInfo = info, C._benchmarkStanzaMainIs = path <$> A.mainIs bi })
+    result = either (Left . show) Right . snd . runResult

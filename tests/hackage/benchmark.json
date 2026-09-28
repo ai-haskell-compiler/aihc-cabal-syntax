@@ -2,18 +2,18 @@
   "parsers": {
     "Cabal-syntax": {
       "total": 200642,
-      "accepted": 200615,
-      "elapsed_seconds": 115.76095083297696,
-      "peak_rss_bytes": 40353792
+      "accepted": 200642,
+      "elapsed_seconds": 120.61674704193138,
+      "peak_rss_bytes": 39469056
     },
     "aihc": {
       "total": 200642,
       "accepted": 200584,
-      "elapsed_seconds": 48.34414125001058,
-      "peak_rss_bytes": 31358976
+      "elapsed_seconds": 50.780948458006606,
+      "peak_rss_bytes": 31850496
     }
   },
-  "reference_version": "3.12.1.0",
+  "reference_version": "3.18.1.0",
   "system": "aarch64-darwin",
   "ghc_version": "9.10.3"
 }

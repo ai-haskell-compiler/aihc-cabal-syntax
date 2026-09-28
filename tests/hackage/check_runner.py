@@ -36,8 +36,8 @@ class RunnerTests(unittest.TestCase):
         self.archive([
             ("sample/1.0/sample.cabal", header + b"unknown-field: warning\n"),
             ("sample/1.0/package.json", b"{}"),
-            # Cabal-syntax 3.12 does not accept format version 3.14.
-            ("sample/1.0/sample.cabal", b"cabal-version: 3.14\nname: sample\nversion: 1.0\n"),
+            # Cabal-syntax requires main-is for this test suite type. The aihc parser does not.
+            ("sample/1.0/sample.cabal", header + b"test-suite bad\n  type: exitcode-stdio-1.0\n"),
             ("old/1/old.cabal", b"name: old\n"),
         ])
         result = self.run_report()

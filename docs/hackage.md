@@ -133,7 +133,10 @@ The Nix comparison uses a private test runner. The library output does not conta
 ## Fixed dependencies
 
 The Nixpkgs revision from `origin/main` stays unchanged.
-`flake.lock` sets exact versions of GHC, Cabal-syntax, Python, curl, and the other tools and libraries.
+`flake.lock` sets exact versions of GHC, Python, curl, and the other tools and libraries.
+The pinned Nixpkgs revision does not contain Cabal-syntax 3.18.1.0.
+`flake.nix` gets this version from Hackage and verifies its SHA-256 hash.
+GHC contains Cabal-syntax 3.12.1.0. The test runners hide it.
 `tests/hackage/snapshot.json` sets the Hackage prefix length, SHA-256 hash, and case counts.
 
 The Hackage index grows when Hackage adds entries.

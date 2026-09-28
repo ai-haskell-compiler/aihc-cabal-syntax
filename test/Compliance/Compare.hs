@@ -3,7 +3,7 @@ module Compliance.Compare
 
 import qualified Data.ByteString as BS
 import qualified Aihc.Cabal as A
-import Compliance.Adapter (toCabal)
+import Compliance.Adapter (runResult, toCabal)
 import qualified Distribution.PackageDescription as C
 import qualified Distribution.PackageDescription.Parsec as C
 
@@ -37,7 +37,7 @@ compareBytes bytes = case (A.parseValue ours, reference) of
                           in report status True True message
   where
     ours = A.parsePackage bytes
-    (warnings, reference) = C.runParseResult (C.parseGenericPackageDescription bytes)
+    (warnings, reference) = runResult (C.parseGenericPackageDescription bytes)
     report status accepted refAccepted message = Comparison status accepted refAccepted
       (length (A.parseWarnings ours)) (length warnings) message
 

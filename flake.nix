@@ -5,9 +5,20 @@
     systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
     each = nixpkgs.lib.genAttrs systems;
     pkgsFor = system: import nixpkgs { inherit system; };
+    # The compliance tests compare with this Cabal-syntax release.
+    # The pinned Nixpkgs revision does not contain it.
+    hpFor = system: (pkgsFor system).haskellPackages.override {
+      overrides = self: _: {
+        Cabal-syntax = self.callHackageDirect {
+          pkg = "Cabal-syntax";
+          ver = "3.18.1.0";
+          sha256 = "sha256-UN4+xwuRA7gUQrsuCfETQK+plV6yn6pNFEISBquvSHk=";
+        } {};
+      };
+    };
     package = system: let
       pkgs = pkgsFor system;
-      hp = pkgs.haskellPackages;
+      hp = hpFor system;
     in hp.mkDerivation {
       pname = "aihc-cabal-syntax";
       version = "0.1.0.0";
@@ -22,22 +33,26 @@
       license = pkgs.lib.licenses.unlicense;
       doCheck = true;
     };
+    # GHC also contains Cabal-syntax, and its Cabal library exports those modules.
+    # Hide them and select the reference version.
+    cabalSyntaxFlag = system:
+      "-hide-package Cabal -package Cabal-syntax-${(hpFor system).Cabal-syntax.version}";
     runner = system: let
       pkgs = pkgsFor system;
-      compiler = pkgs.haskellPackages.ghcWithPackages (hp:
+      compiler = (hpFor system).ghcWithPackages (hp:
         pkgs.lib.filter (dependency: dependency != null)
           (with hp; [ (package system) bytestring containers text Cabal-syntax aeson tar directory filepath ]));
     in pkgs.runCommand "hackage-compliance-test-runner" {
       nativeBuildInputs = [ compiler ];
     } ''
-      ghc -O2 -Wall -Werror -i${./test} \
+      ghc -O2 -Wall -Werror ${cabalSyntaxFlag system} -i${./test} \
         -odir . -hidir . ${./test}/Hackage.hs -o "$out"
     '';
     benchmark = system: let
       pkgs = pkgsFor system;
-      compiler = pkgs.haskellPackages.ghcWithPackages (hp: [ (package system) hp.tar hp.bytestring hp.Cabal-syntax ]);
+      compiler = (hpFor system).ghcWithPackages (hp: [ (package system) hp.tar hp.bytestring hp.Cabal-syntax ]);
     in pkgs.runCommand "hackage-benchmark" { nativeBuildInputs = [ compiler ]; } ''
-      ghc -O2 -Wall -Werror -odir . -hidir . ${./test/Benchmark.hs} -o "$out"
+      ghc -O2 -Wall -Werror ${cabalSyntaxFlag system} -odir . -hidir . ${./test/Benchmark.hs} -o "$out"
     '';
     updateReadme = system: let pkgs = pkgsFor system; in
       pkgs.writeShellApplication {
@@ -51,7 +66,7 @@
           python ${./scripts/readme.py} ${compliance system}/summary.json \
             --stackage ${stackageCompliance system} \
             --runner ${benchmark system} --index ${corpus system}/index.tar \
-            --system ${system} --ghc-version ${pkgs.haskellPackages.ghc.version} "$@"
+            --system ${system} --ghc-version ${(hpFor system).ghc.version} "$@"
         '';
       };
     corpus = system: let
@@ -155,7 +170,7 @@
       '';
     });
     devShells = each (system: let pkgs = pkgsFor system; in {
-      default = pkgs.haskellPackages.shellFor {
+      default = (hpFor system).shellFor {
         packages = _: [ (package system) ];
         nativeBuildInputs = [ pkgs.cabal-install pkgs.python3 pkgs.curl ];
         shellHook = "export GHC_ENVIRONMENT=-";

@@ -124,6 +124,7 @@ The caller applies these fields to the build inputs.
 ## Scope
 
 The parser follows the package parser of Cabal-syntax 3.12.1.0.
+The tests compare the parser with Cabal-syntax 3.18.1.0.
 It supports these features:
 
 - UTF-8 input, indentation with spaces or tabs, comments, and multiline fields.
@@ -139,7 +140,7 @@ It supports these features:
 - The Cabal-syntax rules for repeated fields, unknown fields, and unknown sections.
 
 The parser accepts format versions from 1.0 through 3.14.
-Cabal-syntax 3.12 does not accept format version 3.14.
+Cabal-syntax 3.18 also accepts format version 3.16. This parser does not.
 
 The parser has these limits:
 
