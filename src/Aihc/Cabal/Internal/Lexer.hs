@@ -1,8 +1,8 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- | Read the outline of a Cabal file: fields, sections, and their positions.
--- This module follows the lexer and parser of Cabal-syntax 3.12.
-module Aihc.Cabal.Fields
+-- This module follows the lexer and the outline parser of Cabal-syntax 3.12.
+module Aihc.Cabal.Internal.Lexer
   ( Field (..), SectionArg (..), readFields, sectionArgText
   ) where
 
@@ -10,7 +10,7 @@ import Data.Char (isAsciiUpper, ord, toLower)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Aihc.Cabal.Types (Diagnostic (..), FieldLine (..), Position (..))
+import Aihc.Cabal.Internal.Types (Diagnostic (..), FieldLine (..), Position (..))
 
 data Field
   = Field !Position Text [FieldLine]
@@ -181,7 +181,7 @@ stringToken t = (\n -> (T.take n t, T.drop (n + 1) t)) <$> go Nothing ' ' 0 (T.u
 type Parse a = Stream -> Either Diagnostic (a, Stream)
 
 parseError :: Position -> Token -> Either Diagnostic a
-parseError (Position r c) t = Left (Diagnostic r c ("Unexpected " <> describe t))
+parseError p t = Left (Diagnostic (Just p) ("Unexpected " <> describe t))
   where
     describe x = case x of
       TokSym s -> "symbol " <> T.pack (show s)

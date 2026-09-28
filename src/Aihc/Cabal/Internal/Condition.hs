@@ -2,7 +2,7 @@
 -- | Parse a condition from the arguments of an @if@ or @elif@ section.
 -- This module follows the condition parser of Cabal-syntax 3.12. The parser
 -- reads section argument tokens, not text.
-module Aihc.Cabal.Condition (parseCondition) where
+module Aihc.Cabal.Internal.Condition (parseCondition) where
 
 import Control.Applicative (Alternative (..))
 import Control.Monad (ap)
@@ -13,10 +13,10 @@ import qualified Data.Text as T
 import Text.Megaparsec (eof, runParser, satisfy, takeWhile1P)
 import qualified Text.Megaparsec as M
 import Text.Megaparsec.Char (char)
-import Aihc.Cabal.Fields (SectionArg (..))
-import Aihc.Cabal.Types (Condition (..))
-import Aihc.Cabal.Values (flagNameValue, identifier)
-import Aihc.Cabal.Version
+import Aihc.Cabal.Internal.Lexer (SectionArg (..))
+import Aihc.Cabal.Internal.Types (Condition (..))
+import Aihc.Cabal.Internal.Values (flagNameValue, identifier)
+import Aihc.Cabal.Internal.Version
 
 -- | A parser with Parsec semantics: an alternative runs only when the first
 -- parser fails without input consumption.

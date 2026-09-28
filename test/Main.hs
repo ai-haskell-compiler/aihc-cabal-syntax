@@ -41,10 +41,10 @@ version :: Text -> Version
 version = either (error . T.unpack) id . parseVersion
 
 environment :: Environment
-environment = Environment "linux" "x86_64" (Map.singleton "ghc" (version "9.12.2"))
+environment = Environment "linux" "x86_64" "ghc" (version "9.12.2")
 
 resolve :: FlagAssignment -> Package -> IO [Component BuildInfo]
-resolve flags pkg = resolvedComponents <$> right (resolvePackage environment flags pkg)
+resolve flags pkg = pure (resolvedComponents (resolvePackage environment flags pkg))
 
 header :: [String]
 header = ["cabal-version: 3.0", "name: sample", "version: 1.2.3"]
@@ -110,13 +110,17 @@ testVersions = do
       "-none" -> pure C.noVersion
       _ -> maybe (fail ("Reference range parse failed: " ++ T.unpack input)) pure (C.simpleParsec (T.unpack input) :: Maybe C.VersionRange)
     forM_ [[0], [0,0,3], [0,1], [1], [1,0], [1,1], [1,2], [1,2,0], [1,2,3], [1,2,4], [1,3], [2], [2,0], [3], [4,18]] $ \ns -> do
-      v <- maybe (fail "Invalid test version") pure (mkVersion (NE.fromList (map toInteger ns)))
+      v <- maybe (fail "Invalid test version") pure (mkVersion (map toInteger ns))
       assert ("Range membership: " ++ T.unpack input ++ " " ++ show ns)
         (C.withinRange (C.mkVersion ns) ref) (withinRange v range)
     parsed <- right (parseVersionRange (renderVersionRange range))
     assert "Range round trip" range parsed
   assert "Version ordering" True (version "1.2" < version "1.2.0")
-  assert "Negative version" Nothing (mkVersion ((-1) :| []))
+  assert "Negative version" Nothing (mkVersion [-1])
+  assert "Empty version" Nothing (mkVersion [])
+  forM_ [(">=1.2 && <1.3 || ==2.0", ">=1.2 && <1.3 || ==2.0"), ("(>=1 && <2) || ==3", ">=1 && <2 || ==3"), ("^>=1.2 && (<1.3 || ==2)", "^>=1.2 && (<1.3 || ==2)"), ("(==1 || ==2) || ==3", "(==1 || ==2) || ==3"), ("(>=1 && <2) && >1.1", "(>=1 && <2) && >1.1"), ("-any", "-any"), ("-none", "<0")] $ \(input, expected) -> do
+    range <- right (parseVersionRange input)
+    assert ("Range rendering: " ++ T.unpack input) expected (renderVersionRange range)
   forM_ ["", "1.", "-1", "1..2", "1a", "1.2 trailing"] $ \input ->
     case parseVersion input of
       Left _ -> pure ()
@@ -136,7 +140,7 @@ testPackage = do
   assert "Flag declarations" [Flag "fast" True False ""] (packageFlags pkg)
   forM_ [True, False] $ \fast -> do
     cs <- resolve (Map.singleton "fast" fast) pkg
-    bi <- case cs of Component (Library Nothing) b:_ -> pure b; _ -> fail "Missing library"
+    bi <- case cs of Component (Library MainLibrary) b:_ -> pure b; _ -> fail "Missing library"
     tree <- maybe (fail "Missing reference library") pure (C.condLibrary ref)
     let selected = collect fast tree
         cbi = mconcat (map C.libBuildInfo selected)
@@ -173,7 +177,7 @@ testPackage = do
           C.Var (C.PackageFlag _) -> fast
           C.Var (C.OS os) -> C.prettyShow os == "linux"
           C.Var (C.Arch arch) -> C.prettyShow arch == "x86_64"
-          C.Var (C.Impl compiler range) -> C.prettyShow compiler == "ghc" && C.withinRange (C.mkVersion [9,12,2]) range
+          C.Var (C.Impl flavor range) -> C.prettyShow flavor == "ghc" && C.withinRange (C.mkVersion [9,12,2]) range
           C.CNot a' -> not (eval a')
           C.CAnd a' b -> eval a' && eval b
           C.COr a' b -> eval a' || eval b
@@ -186,7 +190,7 @@ testConsumers = forM_ ["aihc-hackage", "aihc-package-plan", "aihc-haddock"] $ \p
   components <- resolve Map.empty pkg
   assert "Consumer package name" (T.pack pkgName) (packageName pkg)
   bi <- case components of
-    Component (Library Nothing) b:_ -> pure b
+    Component (Library MainLibrary) b:_ -> pure b
     _ -> fail "Missing consumer library"
   library <- maybe (fail "Missing reference library") (pure . C.condTreeData) (C.condLibrary ref)
   let cbi = C.libBuildInfo library
@@ -207,9 +211,8 @@ testDefaults = do
   assert "Default directory" ["."] (sourceDirs other)
   assert "Absent language stays absent" Nothing (defaultLanguage other)
   assert "Buildable branch" (Just False) (buildable other)
-  case resolvePackage environment (Map.singleton "missing" True) pkg of
-    Left _ -> pure ()
-    Right _ -> fail "Unknown override accepted"
+  assert "Unknown override has no effect" (Map.singleton "chosen" False)
+    (resolvedFlags (resolvePackage environment (Map.singleton "missing" True) pkg))
   quoted <- parse (BSC.unlines (map BSC.pack (header ++ ["library", "  hs-source-dirs: \"source files\"", "  cpp-options: \"-DNAME=hello world\"", "  buildable: False", "  if True", "    buildable: True"])))
   [Component _ q] <- resolve Map.empty quoted
   assert "Quoted path" ["source files"] (sourceDirs q)
@@ -221,7 +224,7 @@ testEmptySections = do
   pkg <- parse "cabal-version: 3.0\nname: sample\nversion: 1\nflag fast\ncommon shared\nlibrary\n  import: shared\n  if flag(fast)\n  else\n    cpp-options: -DSLOW\n  ghc-options: -Wall\nexecutable tool\n"
   assert "Empty flag defaults" [Flag "fast" True False ""] (packageFlags pkg)
   assert "Keep empty sections and branch boundaries"
-    [ Component (Library Nothing) (Conditional
+    [ Component (Library MainLibrary) (Conditional
         (emptyBuildInfo { ghcOptions = ["-Wall"] })
         [Branch (FlagValue "fast") (Conditional emptyBuildInfo [])
           (Just (Conditional (emptyBuildInfo { cppOptions = ["-DSLOW"] }) []))])
@@ -230,7 +233,7 @@ testEmptySections = do
   forM_ [True, False] $ \fast -> do
     components <- resolve (Map.singleton "fast" fast) pkg
     info <- case components of
-      Component (Library Nothing) bi : _ -> pure bi
+      Component (Library MainLibrary) bi : _ -> pure bi
       _ -> fail "Missing library"
     assert "Select an empty branch" (if fast then [] else ["-DSLOW"]) (cppOptions info)
     assert "Keep fields after an empty branch" ["-Wall"] (ghcOptions info)
@@ -297,13 +300,13 @@ testSourceRepositories = do
 testBuildInfo :: IO ()
 testBuildInfo = do
   let input = "cc-options: -DHOOKED\ncpp-options: -DHOOKED_HS\ninclude-dirs: generated\nc-sources: generated.c\nexecutable: sample-tool\ncpp-options: -DEXE\n"
-  ours <- right (parseValue (parseBuildInfo input))
+  ours <- right (parseValue (parseHookedBuildInfo input))
   (lib, exes) <- right (snd (runResult (C.parseHookedBuildInfo input)))
-  assert "Buildinfo C options" (map T.pack . C.ccOptions <$> lib) (ccOptions <$> libraryBuildInfo ours)
-  assert "Buildinfo executable count" (length exes) (Map.size (executableBuildInfo ours))
-  assert "Buildinfo executable options" (Just ["-DEXE"]) (cppOptions <$> Map.lookup "sample-tool" (executableBuildInfo ours))
-  empty <- right (parseValue (parseBuildInfo ""))
-  assert "Empty buildinfo" (BuildInfoFile Nothing Map.empty) empty
+  assert "Buildinfo C options" (map T.pack . C.ccOptions <$> lib) (ccOptions <$> hookedLibrary ours)
+  assert "Buildinfo executable count" (length exes) (Map.size (hookedExecutables ours))
+  assert "Buildinfo executable options" (Just ["-DEXE"]) (cppOptions <$> Map.lookup "sample-tool" (hookedExecutables ours))
+  empty <- right (parseValue (parseHookedBuildInfo ""))
+  assert "Empty buildinfo" (HookedBuildInfo Nothing Map.empty) empty
 
 -- | Cabal does not make a difference between upper case and lower case
 -- in section keywords. A parenthesis can follow the keyword directly.
@@ -334,7 +337,7 @@ testElif = do
   [Component _ bi] <- resolve Map.empty pkg
   assert "Select an elif branch" ["linux"] (sourceDirs bi)
   let at os arch = do
-        resolved <- right (resolvePackage (Environment os arch Map.empty) Map.empty pkg)
+        let resolved = resolvePackage (Environment os arch "ghc" (version "9.12.2")) Map.empty pkg
         pure [sourceDirs b | Component _ b <- resolvedComponents resolved]
   darwin <- at "osx" "aarch64"
   assert "Select the first elif branch" [["darwin"]] darwin
@@ -409,6 +412,12 @@ testRepeatedPackageFields = do
   pkg <- parse (BSC.unlines (map BSC.pack (header ++
     ["extra-source-files: a.txt", "tested-with: GHC == 9.10", "extra-source-files: b.txt"])))
   assert "Keep each value in source order" (Just ["a.txt", "b.txt"]) (map fieldText <$> Map.lookup "extra-source-files" (packageFields pkg))
+  described <- parse (BSC.unlines (map BSC.pack (header ++ ["synopsis: Sample text", "description: First line", "", "    Indented line", "  .", "  Last line"])))
+  assert "Free text from 3.0" (Just "First line\n\n  Indented line\n.\nLast line") (packageFieldText described "description")
+  assert "Free text field name case" (Just "Sample text") (packageFieldText described "Synopsis")
+  assert "Absent free text" Nothing (packageFieldText described "author")
+  older <- parse "cabal-version: >=1.10\nname: sample\nversion: 1\ndescription: First line\n  .\n  Last line\n"
+  assert "Free text before 3.0" (Just "First line\n\nLast line") (packageFieldText older "description")
   renamed <- parse (BSC.unlines (map BSC.pack (header ++ ["name: other", "version: 2"])))
   assert "Last name wins" "other" (packageName renamed)
   assert "Last version wins" (version "2") (packageVersion renamed)
@@ -466,7 +475,10 @@ testErrors = do
   reject (BS.pack [255,254])
   let bad = parsePackage (BSC.unlines (map BSC.pack (header ++ ["library", "  buildable: invalid"])))
   case parseValue bad of
-    Left (d :| _) -> assert "Error source line" 5 (diagnosticLine d)
+    Left d -> assert "Error source position" (Just (Position 5 3)) (diagnosticPosition d)
+    Right _ -> fail "Invalid input accepted"
+  case parseValue (parsePackage "version: 1\n") of
+    Left d -> assert "Package check has no position" Nothing (diagnosticPosition d)
     Right _ -> fail "Invalid input accepted"
   where
     reject bytes = case parseValue (parsePackage bytes) of

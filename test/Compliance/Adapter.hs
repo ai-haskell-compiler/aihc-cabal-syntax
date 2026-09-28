@@ -211,12 +211,14 @@ convertTree convert (A.Conditional bi branches) = do
 component :: C.CabalSpecVersion -> C.GenericPackageDescription
   -> A.Component (A.Conditional A.BuildInfo) -> Either String C.GenericPackageDescription
 component spec gpd (A.Component kind tree) = case kind of
-  A.Library name -> do
-    let libName = maybe C.LMainLibName (C.LSubLibName . componentName) name
+  A.Library target -> do
+    let libName = case target of
+          A.MainLibrary -> C.LMainLibName
+          A.NamedLibrary n -> C.LSubLibName (componentName n)
     converted <- convertTree (library libName) tree
-    pure $ case name of
-      Nothing -> gpd { C.condLibrary = Just converted }
-      Just n -> gpd { C.condSubLibraries = C.condSubLibraries gpd ++ [(componentName n, converted)] }
+    pure $ case target of
+      A.MainLibrary -> gpd { C.condLibrary = Just converted }
+      A.NamedLibrary n -> gpd { C.condSubLibraries = C.condSubLibraries gpd ++ [(componentName n, converted)] }
   A.Executable name -> do
     converted <- convertTree (executable (componentName name)) tree
     pure gpd { C.condExecutables = C.condExecutables gpd ++ [(componentName name, converted)] }

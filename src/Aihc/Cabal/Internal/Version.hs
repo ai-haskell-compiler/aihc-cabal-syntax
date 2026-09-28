@@ -1,8 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Aihc.Cabal.Version
-  ( Version, versionNumbers, mkVersion, parseVersion, renderVersion
+-- | Versions and version ranges. "Aihc.Cabal" exports the public part. The
+-- parsers and the specification version helpers are for the other internal
+-- modules.
+module Aihc.Cabal.Internal.Version
+  ( -- * Public
+    Version, versionNumbers, mkVersion, parseVersion, renderVersion
   , VersionRange (..), anyVersion, noVersion, thisVersion, withinVersion, withinRange, intersectRanges
   , unionRanges, parseVersionRange, renderVersionRange
+    -- * Internal
   , Parser, specVersion, latestSpec, versionParser, versionDigits, rangeParser
   ) where
 
@@ -17,23 +22,47 @@ import Data.Void (Void)
 import Text.Megaparsec (Parsec, between, eof, errorBundlePretty, many, runParser, satisfy, sepBy1, some, takeWhile1P)
 import Text.Megaparsec.Char (char, space, string)
 
+-- | A version: one or more numbers that are not negative. Versions compare
+-- as lists, so @1.2@ is before @1.2.0@.
 newtype Version = Version (NonEmpty Integer) deriving (Eq, Ord, Show)
 
--- | A version range. 'AnyVersion' is the same set of versions as @>= 0@.
+-- | A version range as a Cabal file gives it. The constructors are exported
+-- so that the caller can examine, simplify, or show a range. Equality is
+-- structural: a @^>=@ bound and its expanded intersection are different
+-- values. Use 'withinRange' to test membership.
 data VersionRange
-  = AnyVersion | Equal Version | Later Version | Earlier Version
-  | AtLeast Version | AtMost Version | MajorBound Version | Both VersionRange VersionRange
+  = AnyVersion
+  -- ^ @-any@, or an absent range. The same set of versions as @>= 0@.
+  | Equal Version
+  -- ^ @== v@
+  | Later Version
+  -- ^ @> v@
+  | Earlier Version
+  -- ^ @< v@
+  | AtLeast Version
+  -- ^ @>= v@
+  | AtMost Version
+  -- ^ @<= v@
+  | MajorBound Version
+  -- ^ @^>= v@
+  | Both VersionRange VersionRange
+  -- ^ @a && b@
   | EitherRange VersionRange VersionRange
+  -- ^ @a || b@
   deriving (Eq, Show)
 
 type Parser = Parsec Void Text
 
+-- | The numbers of a version.
 versionNumbers :: Version -> NonEmpty Integer
 versionNumbers (Version ns) = ns
 
-mkVersion :: NonEmpty Integer -> Maybe Version
-mkVersion ns | all (>= 0) ns = Just (Version ns)
-             | otherwise = Nothing
+-- | Make a version from its numbers. The result is 'Nothing' for an empty
+-- list and for a negative number.
+mkVersion :: [Integer] -> Maybe Version
+mkVersion ns = case NE.nonEmpty ns of
+  Just xs | all (>= 0) xs -> Just (Version xs)
+  _ -> Nothing
 
 -- | A known Cabal specification version, for example @specVersion [2, 2]@.
 specVersion :: [Integer] -> Version
@@ -65,26 +94,33 @@ parseWith p input = case runParser (space *> p <* space <* eof) "" input of
   Left err -> Left (T.pack (errorBundlePretty err))
   Right value -> Right value
 
+-- | Parse a version such as @9.12.2@. Spaces around the version are
+-- permitted. Tags such as @-rc1@ are accepted and not kept.
 parseVersion :: Text -> Either Text Version
 parseVersion = parseWith versionParser
 
+-- | Show a version with dots, as in @9.12.2@.
 renderVersion :: Version -> Text
 renderVersion (Version ns) = T.intercalate "." (map (T.pack . show) (NE.toList ns))
 
+-- | The range of all versions.
 anyVersion :: VersionRange
 anyVersion = AnyVersion
 
--- | The empty range @-none@.
+-- | The empty range @-none@, as @< 0@.
 noVersion :: VersionRange
 noVersion = Earlier (Version (0 :| []))
 
+-- | The range @== v@.
 thisVersion :: Version -> VersionRange
 thisVersion = Equal
 
+-- | The range @a && b@ or @a || b@. The functions do not simplify.
 intersectRanges, unionRanges :: VersionRange -> VersionRange -> VersionRange
 intersectRanges = Both
 unionRanges = EitherRange
 
+-- | Test if a version is in a range.
 withinRange :: Version -> VersionRange -> Bool
 withinRange v range = case range of
   AnyVersion -> True
@@ -168,18 +204,31 @@ majorUpperBound (Version ns) = Version $ case ns of
   x :| (y:_) -> x :| [y + 1]
 
 -- | Parse a version range. The parser accepts the syntax of all Cabal
--- format versions: @-any@, @-none@, @^>=@, and version sets.
+-- format versions: @-any@, @-none@, @^>=@, and version sets. Operators
+-- without parentheses associate to the right, as in Cabal-syntax.
 parseVersionRange :: Text -> Either Text VersionRange
 parseVersionRange = parseWith (rangeParser (specVersion [3, 0]))
 
+-- | Show a range in Cabal syntax, for example @>=1.2 && <1.3 || ==2.0@.
+-- The text has parentheses only where the structure needs them. A @||@
+-- operand of @&&@ gets parentheses. A left operand with the same operator
+-- gets parentheses, so that 'parseVersionRange' gives the same value.
 renderVersionRange :: VersionRange -> Text
 renderVersionRange r = case r of
   AnyVersion -> "-any"
-  Equal v -> "== " <> renderVersion v
-  Later v -> "> " <> renderVersion v
-  Earlier v -> "< " <> renderVersion v
-  AtLeast v -> ">= " <> renderVersion v
-  AtMost v -> "<= " <> renderVersion v
-  MajorBound v -> "^>= " <> renderVersion v
-  Both a b -> "(" <> renderVersionRange a <> " && " <> renderVersionRange b <> ")"
-  EitherRange a b -> "(" <> renderVersionRange a <> " || " <> renderVersionRange b <> ")"
+  Equal v -> "==" <> renderVersion v
+  Later v -> ">" <> renderVersion v
+  Earlier v -> "<" <> renderVersion v
+  AtLeast v -> ">=" <> renderVersion v
+  AtMost v -> "<=" <> renderVersion v
+  MajorBound v -> "^>=" <> renderVersion v
+  Both a b -> parens (isBoth a || isEither a) a <> " && " <> parens (isEither b) b
+  EitherRange a b -> parens (isEither a) a <> " || " <> renderVersionRange b
+  where
+    parens needed x
+      | needed = "(" <> renderVersionRange x <> ")"
+      | otherwise = renderVersionRange x
+    isBoth Both {} = True
+    isBoth _ = False
+    isEither EitherRange {} = True
+    isEither _ = False
