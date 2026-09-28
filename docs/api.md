@@ -123,8 +123,8 @@ The caller applies these fields to the build inputs.
 
 ## Scope
 
-The parser follows the package parser of Cabal-syntax 3.12.1.0.
-The tests compare the parser with Cabal-syntax 3.18.1.0.
+The parser follows the package parser of Cabal-syntax 3.18.1.0.
+The tests compare the parser with this version.
 It supports these features:
 
 - UTF-8 input, indentation with spaces or tabs, comments, and multiline fields.
@@ -140,8 +140,10 @@ It supports these features:
 - The Cabal-syntax rules for repeated fields, unknown fields, and unknown sections.
 - The Cabal-syntax patches for 57 known Hackage files. A patched file gets the warning "Legacy cabal file".
 
-The parser accepts format versions from 1.0 through 3.14.
-Cabal-syntax 3.18 also accepts format version 3.16. This parser does not.
+The parser accepts format versions from 1.0 through 3.18.
+The build type `Hooks` is available from format version 3.14. It needs a `custom-setup` section.
+The build type `Make` is not available from format version 3.18.
+Absolute paths are permitted in `hs-source-dirs`, as in Cabal-syntax 3.18.
 
 The parser has these limits:
 

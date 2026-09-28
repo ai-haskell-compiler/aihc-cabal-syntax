@@ -3,7 +3,7 @@
 -- | Parsers for field values. Each parser follows the Cabal-syntax 3.12
 -- parser for the same value.
 module Aihc.Cabal.Values
-  ( runValue, token, token', filePath, sourceDir, quoted, commaList, spaceList, optionList
+  ( runValue, token, token', filePath, quoted, commaList, spaceList, optionList
   , componentName, moduleName, identifier, languageName, bool, buildTypeValue
   , dependency, exeDependency, legacyExeDependency, mixin, flagNameValue, specAtLeast
   ) where
@@ -69,18 +69,6 @@ filePath = do
   x <- token
   when (T.null x) (fail "empty FilePath")
   pure x
-
--- | A relative path that is not empty.
-sourceDir :: Parser Text
-sourceDir = do
-  x <- filePath
-  when (absolute (T.unpack x)) (fail "absolute FilePath")
-  pure x
-  where
-    absolute (d : ':' : s : _) = isAlpha d && (s == '\\' || s == '/')
-    absolute ('\\' : '\\' : _) = True
-    absolute ('/' : _) = True
-    absolute _ = False
 
 quoted :: Parser a -> Parser a
 quoted p = between (char '"') (char '"') p <|> p
@@ -186,11 +174,17 @@ bool = do
     _ -> fail ("Not a boolean: " ++ T.unpack x)
 
 -- | A build type. @Default@ is @Custom@ before cabal-version 1.20.
+-- @Make@ is not permitted from cabal-version 3.18. @Hooks@ is permitted
+-- from cabal-version 3.14.
 buildTypeValue :: Version -> Parser Text
 buildTypeValue spec = do
   x <- takeWhile1P (Just "build type") isAlphaNum
   case x of
-    _ | x `elem` ["Simple", "Configure", "Custom", "Make", "Hooks"] -> pure x
+    _ | x `elem` ["Simple", "Configure", "Custom"] -> pure x
+    "Make" | not (specAtLeast [3, 18] spec) -> pure x
+           | otherwise -> fail "build-type: 'Make'. This feature requires cabal-version <= 3.18."
+    "Hooks" | specAtLeast [3, 14] spec -> pure x
+            | otherwise -> fail "build-type: 'Hooks'. This feature requires cabal-version >= 3.14."
     "Default" | not (specAtLeast [1, 20] spec) -> pure "Custom"
     _ -> fail ("unknown build-type: '" ++ T.unpack x ++ "'")
 

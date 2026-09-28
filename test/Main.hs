@@ -95,6 +95,7 @@ main = do
   testRetainedFields
   testOlderToolDependencies
   testRepeatedPackageFields
+  testNewFormatVersions
   testErrors
   putStrLn "All parser checks passed"
 
@@ -415,6 +416,29 @@ testRepeatedPackageFields = do
     case parseValue (parsePackage (BSC.unlines (map BSC.pack (header ++ [field])))) of
       Left _ -> pure ()
       Right _ -> fail ("Invalid repeated field accepted: " ++ field)
+
+-- | Format versions 3.16 and 3.18, the build type rules of Cabal-syntax
+-- 3.18, and absolute source directories.
+testNewFormatVersions :: IO ()
+testNewFormatVersions = do
+  forM_
+    [ ("3.16", "build-type: Simple", True)
+    , ("3.18", "build-type: Simple", True)
+    , ("3.16", "build-type: Make", True)
+    , ("3.18", "build-type: Make", False)
+    , ("3.12", "build-type: Hooks\ncustom-setup\n  setup-depends: base", False)
+    , ("3.14", "build-type: Hooks\ncustom-setup\n  setup-depends: base", True)
+    , ("3.18", "build-type: Hooks\ncustom-setup\n  setup-depends: base", True)
+    , ("3.14", "build-type: Hooks", False)
+    , ("3.18", "library\n  hs-source-dirs: /absolute", True)
+    ] $ \(spec, body, accepted) -> do
+      let input = BSC.pack ("cabal-version: " ++ spec ++ "\nname: sample\nversion: 1\n" ++ body ++ "\n")
+          ours = either (const False) (const True) (parseValue (parsePackage input))
+          reference = either (const False) (const True) (snd (runResult (C.parseGenericPackageDescription input)))
+      assert ("Reference acceptance: " ++ spec ++ " " ++ body) accepted reference
+      assert ("Acceptance: " ++ spec ++ " " ++ body) accepted ours
+  pkg <- parse "cabal-version: 3.18\nname: sample\nversion: 1\n"
+  assert "Newest format version" (version "3.18") (cabalVersion pkg)
 
 testErrors :: IO ()
 testErrors = do

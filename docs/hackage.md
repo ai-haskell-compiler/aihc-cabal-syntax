@@ -203,3 +203,24 @@ The schedule starts after the workflow file is on `main`.
 The repository must permit GitHub Actions to create pull requests.
 The workflow uses `GITHUB_TOKEN`. Its pull request does not start another CI run.
 The weekly workflow runs the checks before it creates the pull request.
+
+## Pretty-printer round trip
+
+The `pretty-roundtrip` test suite uses Hedgehog to make random `GenericPackageDescription` values.
+The Cabal-syntax pretty-printer writes each value as Cabal file text.
+Our parser and Cabal-syntax read the text.
+The test converts our result with the same converter as the Hackage comparison.
+The converted value must be equal to the Cabal-syntax result.
+The Cabal-syntax result must also be equal to the random value.
+This second check shows that the text contains all data in the random value.
+
+The test makes 2,000 values from a fixed seed. `nix build` runs it with the other test suites.
+The generator uses all Cabal format versions from 1.0 to 3.18.
+It makes each field that the pretty-printer writes, with the values that the format version permits.
+The values include dependencies on sub-libraries of the package, all build types, and conditional branches in all component types.
+Names, paths, options, and free text contain characters that are not ASCII.
+
+The generator does not make values that the pretty-printer cannot write correctly.
+For example, the printer does not escape quotation marks in options.
+It also does not keep the grouping of operators in some version ranges and license expressions.
+Comments in `test/RoundTrip.hs` identify each such limit.

@@ -29,7 +29,7 @@
       isLibrary = true;
       isExecutable = false;
       libraryHaskellDepends = with hp; [ base bytestring containers text megaparsec parser-combinators ];
-      testHaskellDepends = with hp; [ base bytestring containers text Cabal-syntax aeson tar directory filepath ];
+      testHaskellDepends = with hp; [ base bytestring containers text Cabal-syntax aeson tar directory filepath hedgehog ];
       license = pkgs.lib.licenses.unlicense;
       doCheck = true;
     };
