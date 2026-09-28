@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- | Read package descriptions. The rules follow the package parser of
 -- Cabal-syntax 3.12. Cabal format version 3.14 and build type @Hooks@ are
@@ -358,6 +359,8 @@ buildInfoFields spec kind fs = do
   cc <- options (get "cc-options")
   cxxOpts <- options (since [2, 2] "cxx-options")
   ghc <- options (get "ghc-options")
+  -- Evaluate the other fields now. Then the parsed field lines are not kept.
+  let !rest = Map.filterWithKey keep fs
   pure BuildInfo
     { buildable = buildable', sourceDirs = map T.unpack (dirs ++ oldDirs), exposedModules = exposed
     , otherModules = other, autogenModules = autogen, virtualModules = virtual
@@ -385,7 +388,6 @@ buildInfoFields spec kind fs = do
     options = monoidal (optionList token')
     typed = typedFields ++ ["exposed-modules" | kind == LibraryKind]
       ++ ["main-is" | kind `elem` [ExecutableKind, TestKind, BenchmarkKind]]
-    rest = Map.filterWithKey keep fs
     keep k _
       | k `elem` typed = False
       | kind == CommonKind = k `elem` buildInfoFieldNames || "x-" `T.isPrefixOf` k
