@@ -52,6 +52,9 @@ the file's format version. Use `fieldText` for component fields in
 `parseHookedBuildInfo` reads the `.buildinfo` file that a configure script
 writes. The caller applies its fields to the build inputs.
 
+Use `renderDiagnostic` to show a parse error or a warning to a user.
+The text is `line 12, column 3: message`, or only the message when the diagnostic has no position.
+
 `parseDependency` reads one `build-depends` entry, for example `base >=4 && <5`.
 `parsePackageIdentifier` reads a package name with an optional version, for example `foo-1.2`.
 Use them for values outside a Cabal file, such as command line arguments.

@@ -10,6 +10,7 @@ This project uses the format from [Keep a Changelog](https://keepachangelog.com/
 
 - Add `parseDependency` to read one `build-depends` entry.
 - Add `parsePackageIdentifier` to read a package name with an optional version.
+- Add `renderDiagnostic` to show a diagnostic as text for a user.
 - Add `simplifyVersionRange`. It gives the same versions as a union of separate intervals in increasing order.
 
 ### Fixed

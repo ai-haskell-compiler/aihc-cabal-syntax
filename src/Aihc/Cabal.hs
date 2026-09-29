@@ -58,6 +58,7 @@ module Aihc.Cabal
   , parsePackageIdentifier
   , ParseResult (..)
   , Diagnostic (..)
+  , renderDiagnostic
   , Position (..)
     -- * Packages
   , Package (..)
