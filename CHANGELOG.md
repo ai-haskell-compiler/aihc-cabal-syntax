@@ -6,6 +6,10 @@ This project uses the format from [Keep a Changelog](https://keepachangelog.com/
 
 ## [Unreleased]
 
+### Added
+
+- Add `simplifyVersionRange`. It gives the same versions as a union of separate intervals in increasing order.
+
 ### Fixed
 
 - Apply the Cabal-syntax aliases for operating system and architecture names.

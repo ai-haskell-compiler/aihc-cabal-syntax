@@ -6,7 +6,7 @@ module Aihc.Cabal.Internal.Version
   ( -- * Public
     Version, versionNumbers, mkVersion, parseVersion, renderVersion
   , VersionRange (..), anyVersion, noVersion, thisVersion, withinVersion, withinRange, intersectRanges
-  , unionRanges, parseVersionRange, renderVersionRange
+  , unionRanges, simplifyVersionRange, parseVersionRange, renderVersionRange
     -- * Internal
   , Parser, specVersion, latestSpec, versionParser, versionDigits, rangeParser
   ) where
@@ -14,6 +14,7 @@ module Aihc.Cabal.Internal.Version
 import Control.Applicative ((<|>))
 import Control.Monad (when)
 import Data.Char (isAlphaNum, isDigit)
+import Data.List (sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import Data.Text (Text)
@@ -115,7 +116,8 @@ noVersion = Earlier (Version (0 :| []))
 thisVersion :: Version -> VersionRange
 thisVersion = Equal
 
--- | The range @a && b@ or @a || b@. The functions do not simplify.
+-- | The range @a && b@ or @a || b@. The functions do not simplify. Use
+-- 'simplifyVersionRange' for that.
 intersectRanges, unionRanges :: VersionRange -> VersionRange -> VersionRange
 intersectRanges = Both
 unionRanges = EitherRange
@@ -232,3 +234,89 @@ renderVersionRange r = case r of
     isBoth _ = False
     isEither EitherRange {} = True
     isEither _ = False
+
+-- | The same set of versions as a union of separate intervals in increasing
+-- order. An empty range gives 'noVersion'. A range of all versions gives
+-- 'anyVersion'.
+--
+-- An interval becomes @==v@, a bound, or two bounds with @&&@. The bounds
+-- keep their operators, so @>1@ stays @>1@. A @^>=@ bound and a @==v.*@ range
+-- become two bounds. The unions associate to the right, as the parser reads
+-- them.
+--
+-- Version @0@ is the smallest version, so a lower bound @>=0@ has no effect.
+-- No version is between @v@ and @v.0@, so @>1 && <1.0@ is empty and
+-- @>1 && <=1.0@ is @==1.0@.
+simplifyVersionRange :: VersionRange -> VersionRange
+simplifyVersionRange range = case map fromInterval (intervals range) of
+  [] -> noVersion
+  parts -> foldr1 EitherRange parts
+  where
+    fromInterval (Interval low high)
+      | Just high' <- high, upperKey high' == successor (lowerKey low) = Equal (lowerKey low)
+      | otherwise = case (lowerPart, upperPart) of
+          (Nothing, Nothing) -> AnyVersion
+          (Just a, Nothing) -> a
+          (Nothing, Just b) -> b
+          (Just a, Just b) -> Both a b
+      where
+        lowerPart
+          | lowerKey low == zero = Nothing
+          | otherwise = Just (let Bound v inclusive = low in if inclusive then AtLeast v else Later v)
+        upperPart = fmap (\(Bound v inclusive) -> if inclusive then AtMost v else Earlier v) high
+
+-- | A bound version, and whether the version itself is in the interval.
+data Bound = Bound Version Bool
+
+-- | An interval from a lower bound to an upper bound. 'Nothing' is no upper
+-- bound.
+data Interval = Interval Bound (Maybe Bound)
+
+zero :: Version
+zero = Version (0 :| [])
+
+-- | The next version: no version is between @v@ and @v.0@.
+successor :: Version -> Version
+successor (Version ns) = Version (ns <> (0 :| []))
+
+-- | The smallest version in the interval above a lower bound.
+lowerKey :: Bound -> Version
+lowerKey (Bound v inclusive) = if inclusive then v else successor v
+
+-- | The smallest version above the interval below an upper bound.
+upperKey :: Bound -> Version
+upperKey (Bound v inclusive) = if inclusive then successor v else v
+
+-- | Separate, nonempty intervals in increasing order.
+intervals :: VersionRange -> [Interval]
+intervals range = case range of
+  AnyVersion -> [Interval (Bound zero True) Nothing]
+  Equal v -> [Interval (Bound v True) (Just (Bound v True))]
+  Later v -> [Interval (Bound v False) Nothing]
+  Earlier v -> normalize [Interval (Bound zero True) (Just (Bound v False))]
+  AtLeast v -> [Interval (Bound v True) Nothing]
+  AtMost v -> [Interval (Bound zero True) (Just (Bound v True))]
+  MajorBound v -> normalize [Interval (Bound v True) (Just (Bound (majorUpperBound v) False))]
+  EitherRange a b -> normalize (intervals a ++ intervals b)
+  Both a b -> normalize [intersect x y | x <- intervals a, y <- intervals b]
+  where
+    intersect (Interval low high) (Interval low' high') =
+      Interval (if lowerKey low' > lowerKey low then low' else low) (minUpper high high')
+    minUpper Nothing b = b
+    minUpper a Nothing = a
+    minUpper (Just a) (Just b) = Just (if upperKey b < upperKey a then b else a)
+
+normalize :: [Interval] -> [Interval]
+normalize = merge . sortOn (\(Interval low _) -> lowerKey low) . filter nonEmpty
+  where
+    nonEmpty (Interval _ Nothing) = True
+    nonEmpty (Interval low (Just high)) = lowerKey low < upperKey high
+    merge (Interval low high : Interval low' high' : rest)
+      | touches high low' = merge (Interval low (maxUpper high high') : rest)
+    merge (x : rest) = x : merge rest
+    merge [] = []
+    touches Nothing _ = True
+    touches (Just high) low' = lowerKey low' <= upperKey high
+    maxUpper Nothing _ = Nothing
+    maxUpper _ Nothing = Nothing
+    maxUpper (Just a) (Just b) = Just (if upperKey b > upperKey a then b else a)
