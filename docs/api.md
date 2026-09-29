@@ -39,6 +39,11 @@ The `Environment` names the target, not the host. Set `compiler` and
 `compilerVersion` to the compiler that the target emulates. The library does
 not read the host platform or an installed compiler.
 
+Operating system and architecture names use the aliases of Cabal-syntax.
+The parser changes an alias in `os(...)` to its canonical name, for example `darwin` to `osx`.
+A name in `arch(...)` has no aliases, so `arch(arm64)` is not true for the target `aarch64`.
+The `targetOS` and `targetArch` names use the aliases for host names, for example `darwin` and `arm64`.
+
 Fields that the API does not type stay as text. Use `packageFieldText` for
 package fields such as `description`. It applies the Cabal free text rules of
 the file's format version. Use `fieldText` for component fields in

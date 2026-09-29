@@ -22,6 +22,7 @@ import qualified Distribution.Types.PackageId as C
 import qualified Distribution.Types.PackageName as C
 import qualified Distribution.Types.UnqualComponentName as C
 import qualified Distribution.Compat.NonEmptySet as C
+import qualified Distribution.System as C
 import qualified Distribution.Types.Version as C
 import qualified Distribution.Types.VersionRange as C
 import qualified Distribution.Utils.Path as C
@@ -103,6 +104,7 @@ main = do
   testRepeatedPackageFields
   testNewFormatVersions
   testSingleValues
+  testPlatformAliases
   testErrors
   putStrLn "All parser checks passed"
 
@@ -497,6 +499,49 @@ testSingleValues = do
       [ "foo", "foo-1.2", "foo-bar-1.2.3", "foo-bar", "foo-1.2-3", "foo-1a", "foo-01", "1-2", "foo.bar-1"
       , "foo-1.2.", "", "foo-", "-foo", "foo--1", "foo-1.2 ", " foo", "base-4.18.0.0", "a-b-c"
       , "foo-1.2 bar", "foo-0", "foo-1234567890", "foo_bar-1", "FOO-1" ]
+
+-- | Cabal-syntax gives aliases to the names in @os(...)@ with its Compat
+-- table, and to the names in @arch(...)@ with its Strict table, which has no
+-- aliases. It gives aliases to the host names with its Permissive table.
+-- A condition is true when the two classified names are equal.
+testPlatformAliases :: IO ()
+testPlatformAliases = do
+  forM_ osNames $ \name -> do
+    reference <- referenceCondition ("os(" <> name <> ")")
+    forM_ osTargets $ \target -> do
+      let expected = case reference of
+            C.Var (C.OS os) -> os == C.classifyOS C.Permissive target
+            other -> error ("Unexpected reference condition: " ++ show other)
+      assert ("os(" ++ name ++ ") on " ++ target) expected
+        (evaluate ("os(" <> name <> ")") (Environment (T.pack target) "x86_64" "ghc" (version "9.12.2")))
+  forM_ archNames $ \name -> do
+    reference <- referenceCondition ("arch(" <> name <> ")")
+    forM_ archTargets $ \target -> do
+      let expected = case reference of
+            C.Var (C.Arch arch) -> arch == C.classifyArch C.Permissive target
+            other -> error ("Unexpected reference condition: " ++ show other)
+      assert ("arch(" ++ name ++ ") on " ++ target) expected
+        (evaluate ("arch(" <> name <> ")") (Environment "linux" (T.pack target) "ghc" (version "9.12.2")))
+  where
+    osNames = ["darwin", "osx", "OSX", "Darwin", "mingw32", "win32", "cygwin32", "windows", "gnu", "hurd"
+      , "kfreebsdgnu", "freebsd", "solaris2", "linux-android", "linux-androideabi", "linux", "wasi", "other"]
+    osTargets = ["osx", "darwin", "windows", "mingw32", "cygwin32", "hurd", "gnu", "freebsd", "kfreebsdgnu"
+      , "solaris", "solaris2", "android", "linux-android", "linux-androideabi", "linux", "wasi", "other"]
+    archNames = ["arm64", "aarch64", "AArch64", "amd64", "x86_64", "i386", "i686", "x86", "powerpc", "ppc"
+      , "armel", "arm", "wasm32", "other"]
+    archTargets = ["aarch64", "arm64", "x86_64", "amd64", "i386", "i686", "ppc", "powerpc", "arm", "armel"
+      , "wasm32", "other"]
+    source condition = BSC.unlines (map BSC.pack (header ++ ["library", "  if " ++ condition, "    cpp-options: -DTRUE"]))
+    referenceCondition condition = do
+      ref <- right (snd (runResult (C.parseGenericPackageDescription (source condition))))
+      case C.condLibrary ref of
+        Just (C.CondNode _ [C.CondBranch c _ _]) -> pure c
+        _ -> fail ("Missing reference branch for " ++ condition)
+    evaluate condition env = case parseValue (parsePackage (source condition)) of
+      Right pkg -> case packageComponents pkg of
+        [Component _ (Conditional _ [Branch c _ _])] -> evaluateCondition env Map.empty c
+        _ -> error ("Missing branch for " ++ condition)
+      Left e -> error (show e)
 
 testErrors :: IO ()
 testErrors = do

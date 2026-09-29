@@ -11,6 +11,13 @@ This project uses the format from [Keep a Changelog](https://keepachangelog.com/
 - Add `parseDependency` to read one `build-depends` entry.
 - Add `parsePackageIdentifier` to read a package name with an optional version.
 
+### Fixed
+
+- Apply the Cabal-syntax aliases for operating system and architecture names.
+  The parser changes an alias in `os(...)` to its canonical name, for example `darwin` to `osx`.
+  `evaluateCondition` applies the aliases for host names to the `Environment` names.
+  A name in `arch(...)` has no aliases, as in Cabal-syntax.
+
 ## [1.0.0.1] - 2026-09-29
 
 ### Changed

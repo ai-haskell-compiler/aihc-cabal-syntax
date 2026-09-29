@@ -14,6 +14,7 @@ import Text.Megaparsec (eof, runParser, satisfy, takeWhile1P)
 import qualified Text.Megaparsec as M
 import Text.Megaparsec.Char (char)
 import Aihc.Cabal.Internal.Lexer (SectionArg (..))
+import Aihc.Cabal.Internal.Platform (Strictness (..), canonicalOS)
 import Aihc.Cabal.Internal.Types (Condition (..))
 import Aihc.Cabal.Internal.Values (flagNameValue, identifier)
 import Aihc.Cabal.Internal.Version
@@ -100,7 +101,7 @@ parseCondition args = case runP (condOr <* end) args of
     condOr = foldl1 Or <$> sepBy1 condAnd (oper "||")
     condAnd = foldl1 And <$> sepBy1 cond (oper "&&")
     cond = boolean <|> parens condOr <|> (Not <$> (oper "!" *> cond))
-      <|> (word "os" *> parens (OS <$> value identifier))
+      <|> (word "os" *> parens (OS . canonicalOS Compat <$> value identifier))
       <|> (word "arch" *> parens (Arch <$> value identifier))
       <|> (word "flag" *> parens (FlagValue <$> value flagNameValue))
       <|> (word "impl" *> parens (Impl <$> value compiler <*> (versionRange <|> pure anyVersion)))
