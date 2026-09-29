@@ -32,6 +32,15 @@ data Diagnostic = Diagnostic
   , diagnosticMessage :: Text
   } deriving (Eq, Show)
 
+-- | The text of a diagnostic for a user, for example
+-- @line 12, column 3: Unexpected token@. Without a position, the text is the
+-- message only. The column counts UTF-8 bytes, as in 'Position'.
+renderDiagnostic :: Diagnostic -> Text
+renderDiagnostic d = case diagnosticPosition d of
+  Just (Position row column) ->
+    "line " <> T.pack (show row) <> ", column " <> T.pack (show column) <> ": " <> diagnosticMessage d
+  Nothing -> diagnosticMessage d
+
 -- | The result of a parse. The parser stops at the first error, so the
 -- error side holds one diagnostic. Warnings are present with an error and
 -- with a value. The parser gives one warning: @Legacy cabal file@ for a
