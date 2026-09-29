@@ -6,6 +6,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Aihc.Cabal.Internal.Platform (Strictness (..), canonicalArch, canonicalOS)
 import Aihc.Cabal.Internal.Types
 import Aihc.Cabal.Internal.Values (freeText)
 import Aihc.Cabal.Internal.Version (withinRange)
@@ -13,16 +14,25 @@ import Aihc.Cabal.Internal.Version (withinRange)
 -- | Evaluate a condition for a target and a flag assignment. A flag that is
 -- not in the assignment is 'False'. Names of operating systems,
 -- architectures, and compilers compare without case.
+--
+-- The names get the aliases of Cabal-syntax before the comparison. A name in
+-- @os(...)@ uses the aliases for conditions, so @os(darwin)@ is true for the
+-- target @osx@. A name in @arch(...)@ has no aliases, so @arch(arm64)@ is
+-- false for the target @aarch64@, as in Cabal. The target names use the
+-- aliases for host names, so the target @darwin@ is @osx@ and the target
+-- @arm64@ is @aarch64@.
 evaluateCondition :: Environment -> FlagAssignment -> Condition -> Bool
 evaluateCondition env flags cond = case cond of
   Literal b -> b
-  OS x -> T.toLower x == T.toLower (targetOS env)
-  Arch x -> T.toLower x == T.toLower (targetArch env)
+  OS x -> sameName (canonicalOS Compat x) (canonicalOS Permissive (targetOS env))
+  Arch x -> sameName (canonicalArch Strict x) (canonicalArch Permissive (targetArch env))
   Impl x range -> T.toLower x == T.toLower (compiler env) && withinRange (compilerVersion env) range
   FlagValue x -> Map.findWithDefault False x flags
   Not a -> not (evaluateCondition env flags a)
   And a b -> evaluateCondition env flags a && evaluateCondition env flags b
   Or a b -> evaluateCondition env flags a || evaluateCondition env flags b
+  where
+    sameName a b = T.toLower a == T.toLower b
 
 -- | Evaluate the conditions of all components and apply defaults.
 --

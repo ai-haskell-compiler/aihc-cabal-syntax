@@ -133,7 +133,9 @@ type FlagAssignment = Map Text Bool
 data Condition
   = Literal Bool
   | OS Text
-  -- ^ @os(name)@. The comparison ignores case.
+  -- ^ @os(name)@. The comparison ignores case. The parser changes an alias
+  -- to its canonical name, as Cabal-syntax does. For example, @darwin@
+  -- becomes @osx@, and @mingw32@ becomes @windows@.
   | Arch Text
   -- ^ @arch(name)@. The comparison ignores case.
   | Impl Text VersionRange
@@ -374,9 +376,11 @@ data Package = Package
 -- library does not read the host platform or an installed compiler.
 data Environment = Environment
   { targetOS :: Text
-  -- ^ For @os(...)@, for example @linux@. Case does not matter.
+  -- ^ For @os(...)@, for example @linux@. Case does not matter. The
+  -- aliases of Cabal-syntax for host names apply, so @darwin@ is @osx@.
   , targetArch :: Text
-  -- ^ For @arch(...)@, for example @x86_64@. Case does not matter.
+  -- ^ For @arch(...)@, for example @x86_64@. Case does not matter. The
+  -- aliases of Cabal-syntax for host names apply, so @arm64@ is @aarch64@.
   , compiler :: Text
   -- ^ For @impl(...)@, for example @ghc@. Case does not matter.
   , compilerVersion :: Version
