@@ -47,7 +47,7 @@
 --   a t'BuildInfo' field stay in 'extraFields' as text. The parser does not
 --   check these values.
 -- * The parser stops at the first error.
--- * There is no version range simplifier and no package printer.
+-- * There is no package printer.
 -- * The library does not solve dependencies, find source files, or run
 --   configure scripts.
 module Aihc.Cabal
@@ -104,6 +104,7 @@ module Aihc.Cabal
   , withinVersion
   , intersectRanges
   , unionRanges
+  , simplifyVersionRange
   , withinRange
   , parseVersionRange
   , renderVersionRange

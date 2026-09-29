@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import Control.Monad (forM_, unless)
+import Control.Monad (forM_, unless, when)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import Data.List.NonEmpty (NonEmpty (..))
@@ -105,6 +105,7 @@ main = do
   testNewFormatVersions
   testSingleValues
   testPlatformAliases
+  testSimplifyVersionRange
   testErrors
   putStrLn "All parser checks passed"
 
@@ -542,6 +543,62 @@ testPlatformAliases = do
         [Component _ (Conditional _ [Branch c _ _])] -> evaluateCondition env Map.empty c
         _ -> error ("Missing branch for " ++ condition)
       Left e -> error (show e)
+
+-- | 'simplifyVersionRange' keeps the set of versions and gives separate
+-- intervals in increasing order. The test examines all ranges with one or two
+-- simple parts, and some ranges with three parts, over versions near each
+-- bound.
+testSimplifyVersionRange :: IO ()
+testSimplifyVersionRange = do
+  forM_ ranges $ \range -> do
+    let simple = simplifyVersionRange range
+        label = T.unpack (renderVersionRange range)
+    forM_ grid $ \v ->
+      assert ("Same versions: " ++ label ++ " at " ++ T.unpack (renderVersion v)) (withinRange v range) (withinRange v simple)
+    assert ("Idempotent: " ++ label) simple (simplifyVersionRange simple)
+    let members = [v | v <- grid, withinRange v range]
+    when (null members) $ assert ("Empty: " ++ label) noVersion simple
+    when (length members == length grid) $ assert ("All versions: " ++ label) anyVersion simple
+    let parts = unionParts simple
+        firstMember part = [v | v <- grid, withinRange v part]
+    forM_ (zip parts (drop 1 parts)) $ \(a, b) ->
+      case (firstMember a, firstMember b) of
+        (xs@(_ : _), y : _) -> assert ("Increasing parts: " ++ label) True (maximum xs < y)
+        _ -> pure ()
+  forM_ examples $ \(input, expected) -> do
+    range <- right (parseVersionRange input)
+    assert ("Simplify " ++ T.unpack input) expected (renderVersionRange (simplifyVersionRange range))
+  where
+    v = version
+    points = map v ["0", "1", "1.0", "1.2", "1.2.0", "1.3", "2", "2.0.1"]
+    simple =
+      [anyVersion, noVersion]
+        ++ [f p | p <- points, f <- [Equal, Later, Earlier, AtLeast, AtMost, MajorBound, withinVersion]]
+    pairs = [c a b | a <- simple, b <- simple, c <- [Both, EitherRange]]
+    triples = [c a (d b e) | a <- take 12 simple, b <- take 12 (drop 12 simple), e <- take 12 (drop 30 simple)
+      , c <- [Both, EitherRange], d <- [Both, EitherRange]]
+    ranges = simple ++ pairs ++ triples
+    grid = map v
+      [ "0", "0.0", "0.1", "1", "1.0", "1.0.0", "1.0.1", "1.1", "1.2", "1.2.0", "1.2.0.0", "1.2.1", "1.3"
+      , "1.3.0", "1.4", "2", "2.0", "2.0.0", "2.0.1", "2.0.1.0", "2.0.2", "2.1", "3", "3.0", "10" ]
+    -- The grid holds the smallest version of each interval and of each gap
+    -- between intervals for the points above. Thus a range without a grid
+    -- version is empty, and a range with all grid versions has all versions.
+    unionParts (EitherRange a b) = unionParts a ++ unionParts b
+    unionParts r = [r]
+    examples =
+      [ (">=1 && <2 || >=1.5 && <3", ">=1 && <3")
+      , ("<1.1 || >1.1", "<1.1 || >1.1")
+      , (">1 && <1.0", "<0")
+      , (">1 && <=1.0", "==1.0")
+      , ("^>=1.2", ">=1.2 && <1.3")
+      , ("==1.* && <1.5 || >=1.5 && <2", ">=1 && <2")
+      , (">=0", "-any")
+      , ("<3 || >=2", "-any")
+      , (">=2 && <3 || <1", "<1 || >=2 && <3")
+      , ("<=1 || >=1.0", "-any")
+      , (">=1 && <=1", "==1")
+      ]
 
 testErrors :: IO ()
 testErrors = do

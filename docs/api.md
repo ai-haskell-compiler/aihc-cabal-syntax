@@ -98,8 +98,9 @@ From `cabal-version` 3.4, a dependency name always identifies a package, as in C
   Diagnostics do not identify an exact value column.
 - The parser stops at the first error.
 - Version range rendering preserves structure. It does not preserve the original spelling.
-- No package printer and no version range simplifier is provided.
+- No package printer is provided.
   `intersectRanges` and `unionRanges` build a larger range value each time.
+  Use `simplifyVersionRange` to get a small range with the same versions.
 
 The library does not solve dependencies, search for source files, run configure scripts,
 generate `Paths_*` modules, or manage installed packages.
