@@ -16,11 +16,6 @@ import qualified Distribution.PackageDescription as C
 import qualified Distribution.PackageDescription.Parsec as C
 import qualified Distribution.Parsec as C
 import qualified Distribution.Pretty as C
-import qualified Distribution.Types.Dependency as C
-import qualified Distribution.Types.LibraryName as C
-import qualified Distribution.Types.PackageId as C
-import qualified Distribution.Types.PackageName as C
-import qualified Distribution.Types.UnqualComponentName as C
 import qualified Distribution.Compat.NonEmptySet as C
 import qualified Distribution.System as C
 import qualified Distribution.Types.Version as C
@@ -106,6 +101,7 @@ main = do
   testSingleValues
   testPlatformAliases
   testSimplifyVersionRange
+  testFieldPaths
   testErrors
   putStrLn "All parser checks passed"
 
@@ -532,16 +528,16 @@ testPlatformAliases = do
       , "armel", "arm", "wasm32", "other"]
     archTargets = ["aarch64", "arm64", "x86_64", "amd64", "i386", "i686", "ppc", "powerpc", "arm", "armel"
       , "wasm32", "other"]
-    source condition = BSC.unlines (map BSC.pack (header ++ ["library", "  if " ++ condition, "    cpp-options: -DTRUE"]))
-    referenceCondition condition = do
-      ref <- right (snd (runResult (C.parseGenericPackageDescription (source condition))))
+    source cond = BSC.unlines (map BSC.pack (header ++ ["library", "  if " ++ cond, "    cpp-options: -DTRUE"]))
+    referenceCondition cond = do
+      ref <- right (snd (runResult (C.parseGenericPackageDescription (source cond))))
       case C.condLibrary ref of
         Just (C.CondNode _ [C.CondBranch c _ _]) -> pure c
-        _ -> fail ("Missing reference branch for " ++ condition)
-    evaluate condition env = case parseValue (parsePackage (source condition)) of
+        _ -> fail ("Missing reference branch for " ++ cond)
+    evaluate cond env = case parseValue (parsePackage (source cond)) of
       Right pkg -> case packageComponents pkg of
         [Component _ (Conditional _ [Branch c _ _])] -> evaluateCondition env Map.empty c
-        _ -> error ("Missing branch for " ++ condition)
+        _ -> error ("Missing branch for " ++ cond)
       Left e -> error (show e)
 
 -- | 'simplifyVersionRange' keeps the set of versions and gives separate
@@ -569,16 +565,15 @@ testSimplifyVersionRange = do
     range <- right (parseVersionRange input)
     assert ("Simplify " ++ T.unpack input) expected (renderVersionRange (simplifyVersionRange range))
   where
-    v = version
-    points = map v ["0", "1", "1.0", "1.2", "1.2.0", "1.3", "2", "2.0.1"]
-    simple =
+    points = map version ["0", "1", "1.0", "1.2", "1.2.0", "1.3", "2", "2.0.1"]
+    atoms =
       [anyVersion, noVersion]
         ++ [f p | p <- points, f <- [Equal, Later, Earlier, AtLeast, AtMost, MajorBound, withinVersion]]
-    pairs = [c a b | a <- simple, b <- simple, c <- [Both, EitherRange]]
-    triples = [c a (d b e) | a <- take 12 simple, b <- take 12 (drop 12 simple), e <- take 12 (drop 30 simple)
+    pairs = [c a b | a <- atoms, b <- atoms, c <- [Both, EitherRange]]
+    triples = [c a (d b e) | a <- take 12 atoms, b <- take 12 (drop 12 atoms), e <- take 12 (drop 30 atoms)
       , c <- [Both, EitherRange], d <- [Both, EitherRange]]
-    ranges = simple ++ pairs ++ triples
-    grid = map v
+    ranges = atoms ++ pairs ++ triples
+    grid = map version
       [ "0", "0.0", "0.1", "1", "1.0", "1.0.0", "1.0.1", "1.1", "1.2", "1.2.0", "1.2.0.0", "1.2.1", "1.3"
       , "1.3.0", "1.4", "2", "2.0", "2.0.0", "2.0.1", "2.0.1.0", "2.0.2", "2.1", "3", "3.0", "10" ]
     -- The grid holds the smallest version of each interval and of each gap
@@ -599,6 +594,43 @@ testSimplifyVersionRange = do
       , ("<=1 || >=1.0", "-any")
       , (">=1 && <=1", "==1")
       ]
+
+-- | 'fieldPaths' reads a custom field as @c-sources@ reads its value, for
+-- each Cabal format version.
+testFieldPaths :: IO ()
+testFieldPaths = do
+  forM_ ["1.10", "2.2", "3.0", "3.18"] $ \spec ->
+    forM_ values $ \value@(firstLine, otherLines) -> do
+      let file field = BSC.unlines (map BSC.pack
+            ([ "cabal-version: " ++ (if spec < "2.2" then ">=" else "") ++ spec, "name: sample", "version: 1"
+             , "build-type: Simple", "library", "  " ++ field ++ ": " ++ firstLine ] ++ map ("    " ++) otherLines))
+          label = spec ++ " " ++ show value
+      case (parseValue (parsePackage (file "c-sources")), parseValue (parsePackage (file "x-paths"))) of
+        (reference, Right pkg) -> do
+          custom <- case packageComponents pkg of
+            [Component _ tree] -> pure (Map.findWithDefault [] "x-paths" (extraFields (unconditional tree)))
+            _ -> fail "Missing library"
+          let ours = concat <$> mapM (fieldPaths (cabalVersion pkg)) custom
+          case reference of
+            Right cpkg -> do
+              expected <- case packageComponents cpkg of
+                [Component _ tree] -> pure (cSources (unconditional tree))
+                _ -> fail "Missing library"
+              assert ("Field paths: " ++ label) (Right expected) (either (Left . diagnosticMessage) Right ours)
+            Left _ -> case ours of
+              Left d -> assert ("Field path error position: " ++ label) (Just (Position 6 3)) (diagnosticPosition d)
+              Right paths -> fail ("Paths accepted that c-sources rejects: " ++ label ++ ": " ++ show paths)
+        (_, Left e) -> fail ("Custom field rejected: " ++ label ++ ": " ++ show e)
+  pkg <- parse (BSC.unlines (map BSC.pack (header ++ ["library", "  x-aihc-lir-sources: \"lir/with space.lir\", lir/b.lir"])))
+  custom <- case packageComponents pkg of
+    [Component _ tree] -> pure (extraFields (unconditional tree))
+    _ -> fail "Missing library"
+  assert "Quoted path with a space" (Right ["lir/with space.lir", "lir/b.lir"])
+    (either (Left . diagnosticMessage) Right (concat <$> mapM (fieldPaths (cabalVersion pkg)) (Map.findWithDefault [] "x-aihc-lir-sources" custom)))
+  where
+    values =
+      [ ("a.c b.c", []), ("a.c, b.c", []), ("a.c,b.c", []), (", a.c, b.c", []), ("\"dir with space/a.c\" b.c", [])
+      , ("a.c", ["b.c"]), ("a.c,", ["b.c"]), ("a.c,,b.c", []), ("a.c b.c, c.c", []), ("\"unterminated", []) ]
 
 testErrors :: IO ()
 testErrors = do
