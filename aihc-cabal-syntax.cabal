@@ -2,10 +2,15 @@ cabal-version: 3.0
 name: aihc-cabal-syntax
 version: 1.0.0.0
 synopsis: Parse Cabal files for aihc
+description: Parse Cabal package files for the aihc compiler.
+  Read package data, version ranges, and condition expressions.
+category: Parsing
+maintainer: David Himmelstrup <lemmih@gmail.com>
 license: Unlicense
 license-file: LICENSE
 build-type: Simple
-extra-source-files: README.md CHANGELOG.md test/fixtures/*.cabal
+extra-doc-files: CHANGELOG.md
+extra-source-files: README.md test/fixtures/*.cabal
 
 library
   exposed-modules: Aihc.Cabal
