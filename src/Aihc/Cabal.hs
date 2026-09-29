@@ -68,6 +68,7 @@ module Aihc.Cabal
   , FieldValue (..)
   , FieldLine (..)
   , fieldText
+  , fieldPaths
     -- * Components
   , Component (..)
   , ComponentKind (..)

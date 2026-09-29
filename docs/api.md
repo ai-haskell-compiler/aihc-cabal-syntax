@@ -48,6 +48,8 @@ Fields that the API does not type stay as text. Use `packageFieldText` for
 package fields such as `description`. It applies the Cabal free text rules of
 the file's format version. Use `fieldText` for component fields in
 `extraFields`, for example `x-aihc-lir-sources`.
+Use `fieldPaths` to read such a field as a list of paths with the rules of `c-sources`.
+Give it the `cabalVersion` of the package, because the list rules change with the format version.
 
 `parseHookedBuildInfo` reads the `.buildinfo` file that a configure script
 writes. The caller applies its fields to the build inputs.

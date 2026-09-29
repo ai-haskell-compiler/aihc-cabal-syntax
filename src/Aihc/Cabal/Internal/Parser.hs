@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Read package descriptions. The rules follow the package parser of
 -- Cabal-syntax 3.18. The parser accepts Cabal format versions up to 3.18.
-module Aihc.Cabal.Internal.Parser (parsePackage, parseHookedBuildInfo) where
+module Aihc.Cabal.Internal.Parser (parsePackage, parseHookedBuildInfo, fieldPaths) where
 
 import Control.Monad (foldM, guard, unless, when)
 import Data.Bits (shiftL, (.&.), (.|.))
@@ -89,6 +89,15 @@ singular f (_ : xs) = Just . last <$> mapM f xs
 optionalField :: Parser a -> [FieldValue] -> Result (Maybe a)
 optionalField p = fmap (>>= id) . singular one
   where one fv = if null (fieldLines fv) then Right Nothing else Just <$> parseField p fv
+
+-- | Read a field value as a list of paths, with the rules of @c-sources@ for
+-- a Cabal format version. Use it for a custom field in 'extraFields', for
+-- example @x-aihc-lir-sources@. Give the 'cabalVersion' of the package,
+-- because the list rules change with the format version. Spaces or commas
+-- separate the paths, and a path in quotation marks can contain a space.
+-- An error has the position of the field name.
+fieldPaths :: Version -> FieldValue -> Either Diagnostic [FilePath]
+fieldPaths spec = fmap (map T.unpack) . parseField (spaceList spec filePath)
 
 monoidal :: Parser [a] -> [FieldValue] -> Result [a]
 monoidal p = fmap concat . mapM (parseField p)
