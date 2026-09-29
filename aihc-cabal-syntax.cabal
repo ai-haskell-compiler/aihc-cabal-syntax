@@ -18,6 +18,7 @@ library
     Aihc.Cabal.Internal.Condition
     Aihc.Cabal.Internal.Lexer
     Aihc.Cabal.Internal.Parser
+    Aihc.Cabal.Internal.Platform
     Aihc.Cabal.Internal.Quirks
     Aihc.Cabal.Internal.Resolve
     Aihc.Cabal.Internal.Types

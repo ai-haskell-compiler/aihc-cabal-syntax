@@ -16,6 +16,7 @@ import qualified Distribution.PackageDescription as C
 import qualified Distribution.PackageDescription.Parsec as C
 import qualified Distribution.Parsec as C
 import qualified Distribution.Pretty as C
+import qualified Distribution.System as C
 import qualified Distribution.Types.Version as C
 import qualified Distribution.Types.VersionRange as C
 import qualified Distribution.Utils.Path as C
@@ -96,6 +97,7 @@ main = do
   testOlderToolDependencies
   testRepeatedPackageFields
   testNewFormatVersions
+  testPlatformAliases
   testErrors
   putStrLn "All parser checks passed"
 
@@ -448,6 +450,49 @@ testNewFormatVersions = do
       assert ("Acceptance: " ++ spec ++ " " ++ body) accepted ours
   pkg <- parse "cabal-version: 3.18\nname: sample\nversion: 1\n"
   assert "Newest format version" (version "3.18") (cabalVersion pkg)
+
+-- | Cabal-syntax gives aliases to the names in @os(...)@ with its Compat
+-- table, and to the names in @arch(...)@ with its Strict table, which has no
+-- aliases. It gives aliases to the host names with its Permissive table.
+-- A condition is true when the two classified names are equal.
+testPlatformAliases :: IO ()
+testPlatformAliases = do
+  forM_ osNames $ \name -> do
+    reference <- referenceCondition ("os(" <> name <> ")")
+    forM_ osTargets $ \target -> do
+      let expected = case reference of
+            C.Var (C.OS os) -> os == C.classifyOS C.Permissive target
+            other -> error ("Unexpected reference condition: " ++ show other)
+      assert ("os(" ++ name ++ ") on " ++ target) expected
+        (evaluate ("os(" <> name <> ")") (Environment (T.pack target) "x86_64" "ghc" (version "9.12.2")))
+  forM_ archNames $ \name -> do
+    reference <- referenceCondition ("arch(" <> name <> ")")
+    forM_ archTargets $ \target -> do
+      let expected = case reference of
+            C.Var (C.Arch arch) -> arch == C.classifyArch C.Permissive target
+            other -> error ("Unexpected reference condition: " ++ show other)
+      assert ("arch(" ++ name ++ ") on " ++ target) expected
+        (evaluate ("arch(" <> name <> ")") (Environment "linux" (T.pack target) "ghc" (version "9.12.2")))
+  where
+    osNames = ["darwin", "osx", "OSX", "Darwin", "mingw32", "win32", "cygwin32", "windows", "gnu", "hurd"
+      , "kfreebsdgnu", "freebsd", "solaris2", "linux-android", "linux-androideabi", "linux", "wasi", "other"]
+    osTargets = ["osx", "darwin", "windows", "mingw32", "cygwin32", "hurd", "gnu", "freebsd", "kfreebsdgnu"
+      , "solaris", "solaris2", "android", "linux-android", "linux-androideabi", "linux", "wasi", "other"]
+    archNames = ["arm64", "aarch64", "AArch64", "amd64", "x86_64", "i386", "i686", "x86", "powerpc", "ppc"
+      , "armel", "arm", "wasm32", "other"]
+    archTargets = ["aarch64", "arm64", "x86_64", "amd64", "i386", "i686", "ppc", "powerpc", "arm", "armel"
+      , "wasm32", "other"]
+    source condition = BSC.unlines (map BSC.pack (header ++ ["library", "  if " ++ condition, "    cpp-options: -DTRUE"]))
+    referenceCondition condition = do
+      ref <- right (snd (runResult (C.parseGenericPackageDescription (source condition))))
+      case C.condLibrary ref of
+        Just (C.CondNode _ [C.CondBranch c _ _]) -> pure c
+        _ -> fail ("Missing reference branch for " ++ condition)
+    evaluate condition env = case parseValue (parsePackage (source condition)) of
+      Right pkg -> case packageComponents pkg of
+        [Component _ (Conditional _ [Branch c _ _])] -> evaluateCondition env Map.empty c
+        _ -> error ("Missing branch for " ++ condition)
+      Left e -> error (show e)
 
 testErrors :: IO ()
 testErrors = do
