@@ -14,5 +14,9 @@ jobs:
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
         with:
           install_url: https://releases.nixos.org/nix/nix-2.28.5/install
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
       - run: nix build --no-update-lock-file
       - run: nix flake check --no-update-lock-file
