@@ -52,6 +52,12 @@ the file's format version. Use `fieldText` for component fields in
 `parseHookedBuildInfo` reads the `.buildinfo` file that a configure script
 writes. The caller applies its fields to the build inputs.
 
+`parseDependency` reads one `build-depends` entry, for example `base >=4 && <5`.
+`parsePackageIdentifier` reads a package name with an optional version, for example `foo-1.2`.
+Use them for values outside a Cabal file, such as command line arguments.
+They follow `simpleParsec` of Cabal-syntax. They use the rules of the newest Cabal format version,
+so `-any` and `-none` are not accepted. Spaces after the value are permitted. Spaces before the value are not permitted.
+
 ## Scope
 
 The parser follows the package parser of Cabal-syntax 3.18.1.0. The tests

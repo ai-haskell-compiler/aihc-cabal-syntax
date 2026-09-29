@@ -54,6 +54,8 @@ module Aihc.Cabal
   ( -- * Parsing
     parsePackage
   , parseHookedBuildInfo
+  , parseDependency
+  , parsePackageIdentifier
   , ParseResult (..)
   , Diagnostic (..)
   , Position (..)
@@ -109,4 +111,5 @@ module Aihc.Cabal
 import Aihc.Cabal.Internal.Parser
 import Aihc.Cabal.Internal.Resolve
 import Aihc.Cabal.Internal.Types
+import Aihc.Cabal.Internal.Values (parseDependency, parsePackageIdentifier)
 import Aihc.Cabal.Internal.Version

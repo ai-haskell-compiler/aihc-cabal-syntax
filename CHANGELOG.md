@@ -6,6 +6,11 @@ This project uses the format from [Keep a Changelog](https://keepachangelog.com/
 
 ## [Unreleased]
 
+### Added
+
+- Add `parseDependency` to read one `build-depends` entry.
+- Add `parsePackageIdentifier` to read a package name with an optional version.
+
 ### Fixed
 
 - Apply the Cabal-syntax aliases for operating system and architecture names.

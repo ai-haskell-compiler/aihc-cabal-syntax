@@ -6,6 +6,7 @@ module Aihc.Cabal.Internal.Values
   ( runValue, token, token', filePath, quoted, commaList, spaceList, optionList
   , componentName, moduleName, identifier, languageName, bool, buildTypeValue
   , dependency, exeDependency, legacyExeDependency, mixin, flagNameValue, specAtLeast, freeText
+  , parseDependency, parsePackageIdentifier
   ) where
 
 import Control.Applicative (optional, (<|>))
@@ -215,6 +216,36 @@ dependency spec = do
       x <- library <* space
       xs <- many (comma *> library <* space)
       pure (x :| xs)
+
+-- | Parse one @build-depends@ entry, for example @base >=4 && <5@ or
+-- @pkg:{a, b} ^>=1.2@. The rules are the rules of the newest Cabal format
+-- version, as in @simpleParsec@ of Cabal-syntax. Spaces after the value are
+-- permitted. Spaces before the value are not permitted.
+parseDependency :: Text -> Either Text Dependency
+parseDependency = runSimple (dependency latestSpec)
+
+-- | Parse a package identifier: a package name with an optional version, for
+-- example @foo@ or @foo-bar-1.2.3@. The last part after a @-@ is the version
+-- when it is a valid version. Each part of the name must not contain a dot
+-- and must not be all digits. This follows @simpleParsec@ of Cabal-syntax.
+parsePackageIdentifier :: Text -> Either Text (Text, Maybe Version)
+parsePackageIdentifier = runSimple $ do
+  parts <- component `sepBy1` char '-'
+  let (nameParts, version) = case runSimple versionParser (last parts) of
+        Right v -> (init parts, Just v)
+        Left _ -> (parts, Nothing)
+  if not (null nameParts) && all (\x -> not (T.any (== '.') x) && not (T.all isDigit x)) nameParts
+    then pure (T.intercalate "-" nameParts, version)
+    else fail "all digits or a dot in a portion of package name"
+  where
+    component = takeWhile1P (Just "package identifier") (\c -> isAlphaNum c || c == '.')
+
+-- | Run a parser as @simpleParsec@ of Cabal-syntax does: spaces after the
+-- value are permitted.
+runSimple :: Parser a -> Text -> Either Text a
+runSimple p input = case runParser (p <* space <* eof) "value" input of
+  Left err -> Left (T.pack (errorBundlePretty err))
+  Right x -> Right x
 
 mainLibrary :: NonEmpty LibraryTarget
 mainLibrary = MainLibrary :| []
