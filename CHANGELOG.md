@@ -8,6 +8,8 @@ This project uses the format from [Keep a Changelog](https://keepachangelog.com/
 
 ### Added
 
+- Add `parseDependency` to read one `build-depends` entry.
+- Add `parsePackageIdentifier` to read a package name with an optional version.
 - Add `simplifyVersionRange`. It gives the same versions as a union of separate intervals in increasing order.
 
 ### Fixed

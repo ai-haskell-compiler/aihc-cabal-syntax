@@ -16,6 +16,12 @@ import qualified Distribution.PackageDescription as C
 import qualified Distribution.PackageDescription.Parsec as C
 import qualified Distribution.Parsec as C
 import qualified Distribution.Pretty as C
+import qualified Distribution.Types.Dependency as C
+import qualified Distribution.Types.LibraryName as C
+import qualified Distribution.Types.PackageId as C
+import qualified Distribution.Types.PackageName as C
+import qualified Distribution.Types.UnqualComponentName as C
+import qualified Distribution.Compat.NonEmptySet as C
 import qualified Distribution.System as C
 import qualified Distribution.Types.Version as C
 import qualified Distribution.Types.VersionRange as C
@@ -97,6 +103,7 @@ main = do
   testOlderToolDependencies
   testRepeatedPackageFields
   testNewFormatVersions
+  testSingleValues
   testPlatformAliases
   testSimplifyVersionRange
   testErrors
@@ -451,6 +458,48 @@ testNewFormatVersions = do
       assert ("Acceptance: " ++ spec ++ " " ++ body) accepted ours
   pkg <- parse "cabal-version: 3.18\nname: sample\nversion: 1\n"
   assert "Newest format version" (version "3.18") (cabalVersion pkg)
+
+-- | 'parseDependency' and 'parsePackageIdentifier' accept the same inputs as
+-- 'C.simpleParsec' and give the same values.
+testSingleValues :: IO ()
+testSingleValues = do
+  forM_ dependencyInputs $ \input ->
+    case (parseDependency (T.pack input), C.simpleParsec input :: Maybe C.Dependency) of
+      (Left _, Nothing) -> pure ()
+      (Right ours, Just ref) -> do
+        assert ("Dependency name: " ++ input) (T.pack (C.unPackageName (C.depPkgName ref))) (dependencyPackage ours)
+        assert ("Dependency libraries: " ++ input)
+          (map libraryText (C.toList (C.depLibraries ref))) (map ourLibrary (NE.toList (dependencyLibraries ours)))
+        forM_ sampleVersions $ \ns -> do
+          v <- maybe (fail "Invalid test version") pure (mkVersion (map toInteger ns))
+          assert ("Dependency range: " ++ input ++ " " ++ show ns)
+            (C.withinRange (C.mkVersion ns) (C.depVerRange ref)) (withinRange v (dependencyRange ours))
+      (ours, ref) -> fail ("Dependency acceptance differs for " ++ show input ++ ": " ++ show ours ++ " " ++ show ref)
+  forM_ identifierInputs $ \input ->
+    case (parsePackageIdentifier (T.pack input), C.simpleParsec input :: Maybe C.PackageIdentifier) of
+      (Left _, Nothing) -> pure ()
+      (Right (name, ours), Just ref) -> do
+        assert ("Identifier name: " ++ input) (T.pack (C.unPackageName (C.pkgName ref))) name
+        assert ("Identifier version: " ++ input)
+          (if C.pkgVersion ref == C.nullVersion then Nothing else Just (C.versionNumbers (C.pkgVersion ref)))
+          (map fromInteger . NE.toList . versionNumbers <$> ours)
+      (ours, ref) -> fail ("Identifier acceptance differs for " ++ show input ++ ": " ++ show ours ++ " " ++ show ref)
+  where
+    libraryText C.LMainLibName = Nothing
+    libraryText (C.LSubLibName n) = Just (T.pack (C.unUnqualComponentName n))
+    ourLibrary MainLibrary = Nothing
+    ourLibrary (NamedLibrary n) = Just n
+    sampleVersions = [[0], [1], [1, 2], [1, 2, 3], [2], [3], [3, 9], [4], [4, 18], [4, 18, 0, 0], [5], [9, 9]]
+    dependencyInputs =
+      [ "base", "base >=4 && <5", "base>=4", "base ^>=4.18", "base ==4.*", "base -any", "base -none"
+      , "pkg:sub", "pkg:{a,b} >=1", "pkg:{ a , b }", "pkg:pkg", "base >= 4 || == 3", "base (>=1 && <2) || >3"
+      , "Base", "base-1", "1base", "base-", "", " base", "base ", "foo_bar", "base >=4.0.0.0-rc1"
+      , "base ==1.2.3.4", "base {", "base >=01", "base <1 && >", "base ==1.2.*.3", "base =={1.2,1.3}"
+      , "base:{}", "base >1 ||", "a-b-c <2" ]
+    identifierInputs =
+      [ "foo", "foo-1.2", "foo-bar-1.2.3", "foo-bar", "foo-1.2-3", "foo-1a", "foo-01", "1-2", "foo.bar-1"
+      , "foo-1.2.", "", "foo-", "-foo", "foo--1", "foo-1.2 ", " foo", "base-4.18.0.0", "a-b-c"
+      , "foo-1.2 bar", "foo-0", "foo-1234567890", "foo_bar-1", "FOO-1" ]
 
 -- | Cabal-syntax gives aliases to the names in @os(...)@ with its Compat
 -- table, and to the names in @arch(...)@ with its Strict table, which has no
