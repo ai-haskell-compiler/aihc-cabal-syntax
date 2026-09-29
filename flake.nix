@@ -21,10 +21,10 @@
       hp = hpFor system;
     in hp.mkDerivation {
       pname = "aihc-cabal-syntax";
-      version = "0.1.0.0";
+      version = "1.0.0.0";
       src = pkgs.lib.fileset.toSource {
         root = ./.;
-        fileset = pkgs.lib.fileset.unions [ ./src ./test ./aihc-cabal-syntax.cabal ./LICENSE ./README.md ];
+        fileset = pkgs.lib.fileset.unions [ ./src ./test ./aihc-cabal-syntax.cabal ./LICENSE ./README.md ./CHANGELOG.md ];
       };
       isLibrary = true;
       isExecutable = false;

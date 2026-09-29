@@ -1,11 +1,11 @@
 cabal-version: 3.0
 name: aihc-cabal-syntax
-version: 0.1.0.0
+version: 1.0.0.0
 synopsis: Parse Cabal files for aihc
 license: Unlicense
 license-file: LICENSE
 build-type: Simple
-extra-source-files: README.md test/fixtures/*.cabal
+extra-source-files: README.md CHANGELOG.md test/fixtures/*.cabal
 
 library
   exposed-modules: Aihc.Cabal
