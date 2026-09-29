@@ -569,11 +569,19 @@ testErrors = do
   reject (BS.pack [255,254])
   let bad = parsePackage (BSC.unlines (map BSC.pack (header ++ ["library", "  buildable: invalid"])))
   case parseValue bad of
-    Left d -> assert "Error source position" (Just (Position 5 3)) (diagnosticPosition d)
+    Left d -> do
+      assert "Error source position" (Just (Position 5 3)) (diagnosticPosition d)
+      assert "Error text with a position" ("line 5, column 3: " <> diagnosticMessage d) (renderDiagnostic d)
     Right _ -> fail "Invalid input accepted"
   case parseValue (parsePackage "version: 1\n") of
-    Left d -> assert "Package check has no position" Nothing (diagnosticPosition d)
+    Left d -> do
+      assert "Package check has no position" Nothing (diagnosticPosition d)
+      assert "Error text without a position" (diagnosticMessage d) (renderDiagnostic d)
     Right _ -> fail "Invalid input accepted"
+  assert "Diagnostic text" "line 12, column 3: Unexpected token"
+    (renderDiagnostic (Diagnostic (Just (Position 12 3)) "Unexpected token"))
+  assert "Diagnostic text without a position" "Missing field: name"
+    (renderDiagnostic (Diagnostic Nothing "Missing field: name"))
   where
     reject bytes = case parseValue (parsePackage bytes) of
       Left _ -> pure ()
