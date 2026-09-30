@@ -1,6 +1,6 @@
 cabal-version: 3.0
 name: aihc-cabal-syntax
-version: 1.0.0.1
+version: 2.0.0.0
 synopsis: Parse Cabal files for aihc
 description: Parse Cabal package files for the aihc compiler.
   Read package data, version ranges, and condition expressions.

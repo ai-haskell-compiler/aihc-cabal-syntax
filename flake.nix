@@ -21,7 +21,7 @@
       hp = hpFor system;
     in hp.mkDerivation {
       pname = "aihc-cabal-syntax";
-      version = "1.0.0.1";
+      version = "2.0.0.0";
       src = pkgs.lib.fileset.toSource {
         root = ./.;
         fileset = pkgs.lib.fileset.unions [ ./src ./test ./aihc-cabal-syntax.cabal ./LICENSE ./README.md ./CHANGELOG.md ];
